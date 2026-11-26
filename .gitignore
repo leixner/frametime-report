@@ -15,3 +15,4 @@ recorders/rust/demo/Cargo.lock
 *.report.json
 !examples/*.ftlog
 !examples/*.report.json
+!docs/example.ftlog
