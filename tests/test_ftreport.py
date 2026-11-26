@@ -145,7 +145,8 @@ class FtlogTests(unittest.TestCase):
 
     def test_single_column_lines_and_bad_lines(self):
         text = "# frametime-log v1\n16\n17\n# mark 20.0 two words? no\n"
-        frames, ends, meta, marks, _ = ftreport.read_ftlog(text)
+        cap = ftreport.read_ftlog(text)
+        frames, ends, marks = cap.frames, cap.ends, cap.marks
         self.assertEqual(frames, [16.0, 17.0])
         self.assertEqual(ends, [16.0, 33.0])
         self.assertIn("two words? no", marks)
@@ -158,7 +159,8 @@ class FtlogTests(unittest.TestCase):
         # what ftlog.h writes: integer-formatted ms with 3 decimals, marks flushed inline
         text = ("# frametime-log v1\nt_ms,frame_ms\n# meta settings.profile=series-s\n"
                 "# meta build.repo=owner/name\n16.667,16.667\n# mark 20.001 loaded\n33.334,16.667\n")
-        frames, ends, meta, marks, _ = ftreport.read_ftlog(text)
+        cap = ftreport.read_ftlog(text)
+        frames, meta, marks = cap.frames, cap.meta, cap.marks
         self.assertEqual(len(frames), 2)
         self.assertEqual(meta["settings"]["profile"], "series-s")
         self.assertEqual(meta["build"]["repo"], "owner/name")
@@ -171,6 +173,58 @@ class FtlogTests(unittest.TestCase):
         self.assertEqual(ftreport.parse_value("1920x1080"), "1920x1080")
         self.assertEqual(ftreport.parse_value("abc1234"), "abc1234")
         self.assertEqual(ftreport.parse_value("nan"), "nan")
+        self.assertEqual(ftreport.parse_value("1_000"), "1_000")
+        self.assertEqual(ftreport.parse_value("-2"), -2)
+        self.assertEqual(ftreport.parse_value(".5"), 0.5)
+
+    def test_rounding_is_half_away_from_zero(self):
+        self.assertEqual(ftreport.r2(0.125), 0.13)     # Python's round() would give 0.12
+        self.assertEqual(ftreport.r2(-0.125), -0.13)
+        self.assertEqual(ftreport.r2(2.0), 2.0)
+        self.assertEqual(ftreport.fmt0(179.5), "180")
+
+    def test_busy_columns_in_log(self):
+        lines = ["# frametime-log v1", "t_ms,frame_ms,cpu_ms,gpu_ms"]
+        t = 0.0
+        for i in range(400):
+            t += 40.0
+            gpu = "" if i % 10 == 1 else "36.0"          # some frames without GPU time
+            lines.append("%.3f,40.000,%s,%s" % (t, "30.0" if i % 2 else "NA", gpu))
+        cap = ftreport.read_ftlog("\n".join(lines))
+        self.assertEqual(len(cap.frames), 400)
+        self.assertEqual(sum(1 for c, g in zip(cap.cpu, cap.gpu) if c is not None and g is not None), 160)
+        b = ftreport.analyze_busy(cap.frames, cap.cpu, cap.gpu)
+        self.assertIsNone(b)                               # only 40% of frames have both values
+        cap2 = ftreport.read_ftlog("\n".join(l.replace(",NA,", ",30.0,") for l in lines))
+        b = ftreport.analyze_busy(cap2.frames, cap2.cpu, cap2.gpu)
+        self.assertEqual(b, {"frames": 360, "cpuMs": 30.0, "gpuMs": 36.0, "gpuBoundShare": 1.0, "limit": "gpu"})
+
+
+class BusyTests(unittest.TestCase):
+    def check(self, cpu, gpu, frame, limit, share=None):
+        n = len(cpu)
+        b = ftreport.analyze_busy([frame] * n, cpu, gpu)
+        self.assertEqual(b["limit"], limit, b)
+        if share is not None:
+            self.assertEqual(b["gpuBoundShare"], share)
+
+    def test_gpu_bound(self):
+        self.check([20.0] * 10, [38.0] * 10, 40.0, "gpu", 1.0)
+
+    def test_cpu_bound(self):
+        # the case of one submitting thread at 42 ms while the GPU needs 36 ms
+        self.check([42.0] * 10, [36.0] * 10, 44.0, "cpu", 0.0)
+
+    def test_mixed(self):
+        self.check([30.0, 38.0] * 5, [36.0, 32.0] * 5, 40.0, "mixed", 0.5)
+
+    def test_pacing_when_capped(self):
+        # 30 fps cap: frames take 33.3 ms, but neither side is busy for 25 ms
+        self.check([12.0] * 10, [18.0] * 10, 33.33, "pacing")
+
+    def test_no_data(self):
+        self.assertIsNone(ftreport.analyze_busy([10.0] * 4, [None] * 4, [None] * 4))
+        self.assertIsNone(ftreport.analyze_busy([], [], []))
 
 
 class PresentMonTests(unittest.TestCase):
@@ -205,9 +259,8 @@ class PresentMonTests(unittest.TestCase):
         head = "Application,ProcessID,SwapChainAddress,MsBetweenPresents\n"
         rows = ["a.exe,1,0x1,10.0"] * 30000 + ["b.exe,2,0x2,50.0"] * 100
         p = write(self.d, "pm.csv", head + "\n".join(rows) + "\n")
-        report = ftreport.build_report(ftreport.main.__globals__["argparse"].Namespace(
-            log=p, format="auto", process=None, column=None, skip=0.0, from_mark=None,
-            max_seconds=0.0, min_seconds=180.0, require="", set=None, json="-"))
+        with open(p, encoding="utf-8") as f:
+            report = ftreport.build_report_from_text(f.read(), "pm.csv", {"skip": 0.0, "require": []})
         self.assertEqual(report["app"], "a.exe")
         self.assertTrue(any("several processes" in n for n in report["checks"]["notes"]))
         self.assertTrue(report["checks"]["valid"])               # a note, not a failure
@@ -224,6 +277,7 @@ class PresentMonTests(unittest.TestCase):
         self.assertEqual(r["capture"]["tool"], "presentmon:FrameTime")
         self.assertEqual(r["result"]["frames"], 5940)            # NA rows dropped
         self.assertEqual(r["result"]["avgFps"], round(1000 / 45.0, 2))
+        self.assertNotIn("busy", r["result"])               # GPUBusy column absent: no analysis
 
     def test_capframex_with_preamble(self):
         text = ("// CapFrameX export\nGameName,SomeGame\n\nApplication,MsBetweenPresents\n" +
@@ -243,6 +297,24 @@ class PresentMonTests(unittest.TestCase):
             code, _ = run(["summarize", p])
         self.assertEqual(code, 1)
         self.assertIn("unknown input format", buf.getvalue())
+
+
+class PresentMonBusyTests(unittest.TestCase):
+    def test_presentmon_2x_busy_columns(self):
+        head = "Application,ProcessID,SwapChainAddress,FrameTime,CPUBusy,CPUWait,GPULatency,GPUTime,GPUBusy,GPUWait\n"
+        rows = ["app.exe,1,0x1,45.0,42.1,1.0,2.0,36.5,36.0,8.0" for _ in range(6000)]
+        text = head + "\n".join(rows) + "\n"
+        r = ftreport.build_report_from_text(text, "pm2.csv", {"require": []})
+        self.assertEqual(r["result"]["busy"], {"frames": 5333, "cpuMs": 42.1, "gpuMs": 36.0,
+                                               "gpuBoundShare": 0.0, "limit": "cpu"})
+        self.assertEqual(r["capture"]["ftreport"], ftreport.VERSION)
+
+    def test_presentmon_quoted_fields(self):
+        head = 'Application,ProcessID,PresentMode,MsBetweenPresents\n'
+        rows = ['"my, app.exe",1,"Hardware: Independent Flip",20.0'] * 12000
+        r = ftreport.build_report_from_text(head + "\n".join(rows), "q.csv", {"require": []})
+        self.assertEqual(r["app"], "my, app.exe")
+        self.assertEqual(r["result"]["avgFps"], 50.0)
 
 
 class CompareValidateTests(unittest.TestCase):

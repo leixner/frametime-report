@@ -20,7 +20,11 @@ fn main() {
         // every 50th frame is far slower, so it counts as a stutter even on
         // machines whose sleeps overshoot a lot (CI runners)
         thread::sleep(Duration::from_millis(if i % 50 == 49 { 200 } else { 8 }));
-        ftlog::frame();
+        if i < 10 {
+            ftlog::frame();
+        } else {
+            ftlog::frame_busy(5.0, 7.5);
+        }
     }
     let threads: Vec<_> = (0..4)
         .map(|n| thread::spawn(move || ftlog::mark(&format!("thread-{}", n))))

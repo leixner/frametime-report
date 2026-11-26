@@ -14,7 +14,13 @@
  * Usage:
  *     ftlog_meta("settings.profile", "series-x");   // optional, any time
  *     ftlog_frame();                                 // once per present, right after it
+ *     ftlog_frame_busy(cpu_ms, gpu_ms);              // ...or with the frame's CPU/GPU busy ms
  *     ftlog_mark("loaded");                          // optional named point
+ *
+ * ftlog_frame_busy() lets the report tell CPU-bound from GPU-bound runs.
+ * Typical sources: the CPU time of the thread that builds and submits the
+ * frame, and GPU timestamp queries. GPU times that arrive a few frames late
+ * are fine. Pass a negative value for a time you don't have.
  *     ftlog_close();                                 // optional, at shutdown
  *
  * Data is flushed every second, so a crash loses at most about one second.
@@ -37,6 +43,7 @@ int  ftlog_enabled(void);                               /* 1 when recording */
 void ftlog_meta(const char *key, const char *value);    /* "# meta key=value" */
 void ftlog_mark(const char *label);                     /* "# mark t_ms label" */
 void ftlog_frame(void);                                 /* one presented frame */
+void ftlog_frame_busy(double cpu_ms, double gpu_ms);    /* ...with busy times */
 void ftlog_flush(void);
 void ftlog_close(void);
 
@@ -152,7 +159,7 @@ void ftlog_mark(const char *label)
     fflush(ftlog__f);
 }
 
-void ftlog_frame(void)
+static void ftlog__record(int has_busy, double cpu_ms, double gpu_ms)
 {
     double now, t;
     if (!ftlog__init()) return;
@@ -162,6 +169,13 @@ void ftlog_frame(void)
         ftlog__ms(t);
         fputc(',', ftlog__f);
         ftlog__ms(now - ftlog__last);
+        if (has_busy) {
+            /* "v >= 0 && v < 1e12" also rejects NaN */
+            fputc(',', ftlog__f);
+            if (cpu_ms >= 0.0 && cpu_ms < 1e12) ftlog__ms(cpu_ms);
+            fputc(',', ftlog__f);
+            if (gpu_ms >= 0.0 && gpu_ms < 1e12) ftlog__ms(gpu_ms);
+        }
         fputc('\n', ftlog__f);
     }
     ftlog__last = now;
@@ -171,6 +185,10 @@ void ftlog_frame(void)
         ftlog__last_flush = t;
     }
 }
+
+void ftlog_frame(void) { ftlog__record(0, 0.0, 0.0); }
+
+void ftlog_frame_busy(double cpu_ms, double gpu_ms) { ftlog__record(1, cpu_ms, gpu_ms); }
 
 void ftlog_flush(void)
 {

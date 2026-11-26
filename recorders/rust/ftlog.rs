@@ -19,6 +19,9 @@
 //!
 //! // once per presented frame, right after the present / swap call:
 //! ftlog::frame();
+//! // ...or, if you measure them, with the frame's CPU and GPU busy times (ms),
+//! // which lets the report say whether the frame rate is CPU- or GPU-bound:
+//! ftlog::frame_busy(cpu_ms, gpu_ms);
 //!
 //! // optional named points, e.g. when loading is done:
 //! ftlog::mark("loaded");
@@ -113,12 +116,37 @@ pub fn mark(label: &str) {
 /// Record one presented frame. Call once per present, right after it.
 /// The first call only starts the clock; every later call writes one line.
 pub fn frame() {
+    record(None);
+}
+
+/// Like [`frame`], plus how long the CPU and the GPU were busy on this frame,
+/// in milliseconds. Typical sources: the CPU time of the thread that builds
+/// and submits the frame, and GPU timestamp queries around its work. GPU
+/// times that arrive a few frames late are fine: the report uses medians and
+/// per-frame comparisons over minutes. Pass a negative or non-finite value
+/// for a time you don't have.
+pub fn frame_busy(cpu_ms: f64, gpu_ms: f64) {
+    record(Some((cpu_ms, gpu_ms)));
+}
+
+fn busy_ms(v: f64) -> String {
+    if v.is_finite() && v >= 0.0 {
+        format!("{:.3}", v)
+    } else {
+        String::new()
+    }
+}
+
+fn record(busy: Option<(f64, f64)>) {
     with(|r| {
         let now = Instant::now();
         let t = now.duration_since(r.start).as_secs_f64() * 1000.0;
         if let Some(prev) = r.last {
             let ms = now.duration_since(prev).as_secs_f64() * 1000.0;
-            let _ = writeln!(r.out, "{:.3},{:.3}", t, ms);
+            let _ = match busy {
+                Some((cpu, gpu)) => writeln!(r.out, "{:.3},{:.3},{},{}", t, ms, busy_ms(cpu), busy_ms(gpu)),
+                None => writeln!(r.out, "{:.3},{:.3}", t, ms),
+            };
         }
         r.last = Some(now);
         if t - r.last_flush_ms >= 1000.0 {

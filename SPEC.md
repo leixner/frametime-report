@@ -32,8 +32,11 @@ t_ms,frame_ms
 | `# frametime-log v1` | Must be the first line. |
 | `# meta <key>=<value>` | Metadata. The key is a dotted path into the report, such as `settings.profile`. It may appear anywhere, and later values win. |
 | `# mark <t_ms> <label>` | A named point in time, such as `loaded` or `scene-start`. Labels contain no spaces. |
-| `t_ms,frame_ms` | Column header for the frame lines. Optional. |
+| `t_ms,frame_ms` | Column header for the frame lines. Optional. It may also be `t_ms,frame_ms,cpu_ms,gpu_ms`. |
 | `<t_ms>,<frame_ms>` | One frame. `t_ms` is the time since logging started at the end of the frame, in milliseconds. `frame_ms` is the time since the previous frame ended. |
+| `<t_ms>,<frame_ms>,<cpu_ms>,<gpu_ms>` | One frame, plus how long the CPU and the GPU were busy on it. An empty value or `NA` means unknown. Lines with and without busy times can be mixed. |
+
+Numbers are plain decimals (`16.667`, `-2`, `.5`, `1e3`). Values like `inf`, `nan`, `1_000` or a decimal comma are not numbers.
 
 **What counts as a frame:** one presented image, measured on the host between consecutive present or swap calls on one swap chain. Recorders measure with a monotonic clock (`QueryPerformanceCounter`, `std::time::Instant`, `CLOCK_MONOTONIC`).
 
@@ -67,12 +70,16 @@ The application usually knows `build.*` and `settings.*`. The person testing add
   "scene":    "city-walk",
   "pc":       { "cpu": "…", "gpu": "…", "ramGB": 64, "driver": "…", "os": "…" },
   "capture":  { "tool": "ftlog", "source": "run.ftlog", "seconds": 300.0,
-                "skippedSeconds": 30.0, "fromMark": null },
+                "skippedSeconds": 30.0, "fromMark": null, "ftreport": "0.1.0" },
   "result":   { "frames": 6912, "avgFps": 23.04, "medianMs": 43.1, "p95Ms": 47.0,
-                "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "maxMs": 180.2 },
+                "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "maxMs": 180.2,
+                "busy": { "frames": 6912, "cpuMs": 41.2, "gpuMs": 32.5,
+                          "gpuBoundShare": 0.04, "limit": "cpu" } },
   "checks":   { "valid": true, "notes": [] }
 }
 ```
+
+A JSON Schema for this format is at [`docs/schema/report-0.1.schema.json`](docs/schema/report-0.1.schema.json), published at `https://leixner.github.io/frametime-report/schema/report-0.1.schema.json`.
 
 ### Definitions
 
@@ -89,7 +96,20 @@ The **measured window** is every frame after the skip point. The skip point is `
 | `stutters` | Number of frames longer than `2.5 × medianMs` |
 | `maxMs` | Longest frame |
 
-All values are rounded to 2 decimals.
+Sums run left to right in frame order. All values are rounded to 2 decimals, **half away from zero** (`0.125` → `0.13`). These rules make every implementation give the same digits.
+
+### CPU or GPU bound (`result.busy`)
+
+Present only when at least half of the frames in the window have **both** a CPU and a GPU busy time. These come from the frame log's `cpu_ms,gpu_ms` columns, or PresentMon 2.x `CPUBusy` and `GPUBusy` (or 1.x `MsGPUActive`, which has no CPU column, so it gives no analysis). Only frames with both values count:
+
+| Field | Definition |
+|---|---|
+| `frames` | Frames with both busy times |
+| `cpuMs`, `gpuMs` | Median CPU and GPU busy time |
+| `gpuBoundShare` | Share of those frames where GPU busy ≥ CPU busy |
+| `limit` | `pacing` if both medians are below 75% of the median frame time: a cap, vsync or waits set the pace. Otherwise `gpu` if `gpuBoundShare` ≥ 0.6, `cpu` if it is ≤ 0.4, else `mixed`. |
+
+`pacing` is checked first. A run capped at 30 fps with both sides busy for only half of each frame isn't limited by either.
 
 ### Validity checks
 

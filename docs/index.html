@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>frametime-report</title>
+<meta name="description" content="Turn a PresentMon, CapFrameX or ftlog frame-time capture into a comparable report. Runs entirely in your browser.">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f4f3f0;
+    --surface-1: #fcfcfb;
+    --border: #e2e1dc;
+    --grid: #ebeae6;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #6f6e69;
+    --series-1: #2a78d6;
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --border: #30302d;
+      --grid: #2a2a28;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #9a998f;
+      --series-1: #3987e5;
+      --accent: #3987e5;
+      --accent-ink: #0b0b0b;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --border: #30302d;
+    --grid: #2a2a28;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a998f;
+    --series-1: #3987e5;
+    --accent: #3987e5;
+    --accent-ink: #0b0b0b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 0 0 12px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  p.lead { margin: 0 0 20px; color: var(--text-secondary); max-width: 68ch; }
+  a { color: var(--accent); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 28px 16px; text-align: center;
+    background: var(--surface-1); transition: border-color .15s;
+  }
+  .drop.over { border-color: var(--accent); }
+  .drop p { margin: 6px 0; color: var(--text-secondary); }
+  button, .button {
+    font: inherit; border-radius: 7px; padding: 7px 14px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center; }
+  .privacy { font-size: 13px; color: var(--text-muted); }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  .grid2 > * { min-width: 0; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+  @media (max-width: 480px) { .fields { grid-template-columns: minmax(0, 1fr); } }
+  label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-secondary); }
+  input, select {
+    font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface-0); color: var(--text-primary); min-width: 0;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .tile .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .tile .k { font-size: 12px; color: var(--text-muted); }
+  .verdict { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 4px 0 12px; }
+  .verdict b { font-size: 17px; }
+  .verdict span { color: var(--text-secondary); font-size: 14px; }
+  .chartwrap { position: relative; }
+  canvas { display: block; width: 100%; height: 260px; }
+  .tip {
+    position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+    font-variant-numeric: tabular-nums; display: none;
+  }
+  .caption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--text-secondary); font-weight: 500; width: 45%; }
+  .checks { list-style: none; padding: 0; margin: 0; }
+  .checks li { padding: 3px 0; }
+  .ok { font-weight: 600; }
+  .bad { font-weight: 600; }
+  pre { font-family: var(--mono); font-size: 12px; background: var(--surface-0); border: 1px solid var(--border);
+        border-radius: 8px; padding: 10px; overflow: auto; max-height: 360px; margin: 10px 0 0; }
+  .error { border-color: var(--text-secondary); }
+  footer { margin-top: 28px; font-size: 13px; color: var(--text-muted); }
+  [hidden] { display: none !important; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<main>
+  <h1>frametime-report</h1>
+  <p class="lead">Turn a frame-time capture into a report that compares like for like: time-weighted average fps, p95 and p99 frame times, 1% lows, stutters, and whether the run was CPU- or GPU-bound. Reads PresentMon and CapFrameX CSVs and <code>ftlog</code> frame logs.</p>
+
+  <div class="drop" id="drop">
+    <p><b>Drop a capture here</b></p>
+    <div class="row">
+      <label class="button" for="file" style="flex-direction:row">Choose file…</label>
+      <input type="file" id="file" class="sr" accept=".csv,.ftlog,.txt,text/csv,text/plain">
+      <button type="button" id="example">Try an example</button>
+    </div>
+    <p class="privacy">Your file never leaves your browser: nothing is uploaded.</p>
+  </div>
+
+  <div class="card error" id="error" hidden role="alert"></div>
+
+  <section id="out" hidden>
+    <div class="card">
+      <h2 id="title">Result</h2>
+      <div class="tiles" id="tiles"></div>
+      <div class="verdict" id="verdict"></div>
+      <div class="chartwrap">
+        <canvas id="chart" role="img" aria-label="Frame time over the measured window"></canvas>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="caption" id="caption"></div>
+    </div>
+
+    <div class="grid2">
+      <form class="card" id="opts" autocomplete="off">
+        <h2>Run</h2>
+        <fieldset class="fields">
+          <label>Process <select name="process" id="process"><option value="">auto (most frames)</option></select></label>
+          <label>Start at mark <select name="fromMark" id="fromMark"><option value="">start of file</option></select></label>
+          <label>Skip first (s) <input name="skip" type="number" min="0" step="1" value="30"></label>
+          <label>Max length (s, 0 = all) <input name="maxSeconds" type="number" min="0" step="1" value="0"></label>
+          <label>Minimum valid length (s) <input name="minSeconds" type="number" min="0" step="1" value="180"></label>
+          <label>Scene
+            <select name="scene">
+              <option value="">— choose —</option>
+              <option>menu</option><option>interior</option><option>city-walk</option><option>city-drive</option>
+              <option>open-drive</option><option>boat</option><option>flight</option><option>chase</option>
+              <option value="custom">custom…</option>
+            </select>
+          </label>
+          <label id="customWrap" hidden>Custom scene name <input name="customScene" placeholder="e.g. night-rain"></label>
+        </fieldset>
+        <h2 style="margin-top:18px">Settings</h2>
+        <fieldset class="fields">
+          <label>Profile <input name="settings.profile" placeholder="e.g. series-x"></label>
+          <label>Output <input name="settings.output" placeholder="1920x1080"></label>
+          <label>Internal <input name="settings.internal" placeholder="1280x720"></label>
+          <label>Ray tracing <select name="settings.raytracing"><option value="">—</option><option value="false">off</option><option value="true">on</option></select></label>
+          <label>Upscaler <input name="settings.upscaler" placeholder="none, fsr2, …"></label>
+          <label>FPS cap <input name="settings.fpsCap" type="number" min="0" placeholder="0 = none"></label>
+        </fieldset>
+        <h2 style="margin-top:18px">PC and build</h2>
+        <fieldset class="fields">
+          <label>GPU <input name="pc.gpu"></label>
+          <label>CPU <input name="pc.cpu"></label>
+          <label>RAM (GB) <input name="pc.ramGB" type="number" min="0"></label>
+          <label>Driver <input name="pc.driver"></label>
+          <label>OS <input name="pc.os"></label>
+          <label>Build repo <input name="build.repo" placeholder="owner/name"></label>
+          <label>Build commit <input name="build.commit"></label>
+        </fieldset>
+      </form>
+
+      <div class="card">
+        <h2>Report</h2>
+        <table id="table"></table>
+        <h2 style="margin-top:18px">Checks</h2>
+        <ul class="checks" id="checks"></ul>
+        <div class="row" style="justify-content:flex-start;margin-top:14px">
+          <button type="button" class="primary" id="download">Download report</button>
+          <button type="button" id="copy">Copy JSON</button>
+        </div>
+        <pre id="json"></pre>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Same definitions and results as the <code>ftreport</code> command line tool (checked by tests). ·
+    <a href="https://github.com/leixner/frametime-report">Source and spec</a> ·
+    <a href="schema/report-0.1.schema.json">JSON schema</a>
+  </footer>
+</main>
+
+<script src="ftreport-core.js"></script>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { text: null, name: null, last: null, prefilled: false };
+  var form = $("opts");
+
+  function show(el, on) { el.hidden = !on; }
+
+  function fail(msg) {
+    $("error").textContent = msg;
+    show($("error"), true);
+  }
+
+  function readOptions() {
+    var f = form.elements, set = [];
+    ["settings.profile", "settings.output", "settings.internal", "settings.raytracing", "settings.upscaler",
+     "settings.fpsCap", "pc.gpu", "pc.cpu", "pc.ramGB", "pc.driver", "pc.os", "build.repo", "build.commit"]
+      .forEach(function (k) { var v = f[k].value.trim(); if (v !== "") set.push(k + "=" + v); });
+    var scene = f.scene.value === "custom" ? (f.customScene.value.trim() ? "custom:" + f.customScene.value.trim() : "") : f.scene.value;
+    if (scene) set.push("scene=" + scene);
+    function n(v, d) { var x = parseFloat(v); return isFinite(x) && x >= 0 ? x : d; }
+    return {
+      process: f.process.value || null,
+      fromMark: f.fromMark.value || null,
+      skip: n(f.skip.value, 30), maxSeconds: n(f.maxSeconds.value, 0), minSeconds: n(f.minSeconds.value, 180),
+      set: set
+    };
+  }
+
+  function prefill(report, cap) {
+    var f = form.elements;
+    function put(k, v) { if (v !== null && v !== undefined && f[k] && f[k].value === "") f[k].value = String(v); }
+    ["settings.profile", "settings.output", "settings.internal", "settings.raytracing", "settings.upscaler",
+     "settings.fpsCap", "pc.gpu", "pc.cpu", "pc.ramGB", "pc.driver", "pc.os", "build.repo", "build.commit"]
+      .forEach(function (k) { put(k, FtReport.getDotted(report, k)); });
+    var scene = report.scene;
+    if (scene && !f.scene.value) {
+      if (/^custom:/.test(scene)) { f.scene.value = "custom"; f.customScene.value = scene.slice(7); }
+      else if ([].some.call(f.scene.options, function (o) { return o.value === scene; })) f.scene.value = scene;
+    }
+    show($("customWrap"), f.scene.value === "custom");
+    // marks and processes
+    var fm = f.fromMark, marks = Object.keys(cap.marks);
+    fm.length = 1;
+    marks.forEach(function (m) { fm.add(new Option(m + " (" + (cap.marks[m] / 1000).toFixed(1) + " s)", m)); });
+    if (marks.indexOf("loaded") >= 0) fm.value = "loaded";
+    var ps = f.process;
+    ps.length = 1;
+    (cap.apps || []).forEach(function (a) { ps.add(new Option(a.name + " (" + a.frames + " frames)", a.name)); });
+    ps.disabled = !(cap.apps && cap.apps.length > 1);
+    fm.disabled = !marks.length;
+  }
+
+  function run() {
+    if (state.text === null) return;
+    show($("error"), false);
+    var res;
+    try {
+      res = FtReport.analyze(state.text, state.name, state.prefilled ? readOptions() : {});
+      if (!state.prefilled) {
+        prefill(res.report, res.capture);
+        state.prefilled = true;
+        res = FtReport.analyze(state.text, state.name, readOptions());
+      }
+    } catch (e) {
+      show($("out"), state.last !== null);
+      fail((e && e.message) || String(e));
+      return;
+    }
+    state.last = res;
+    show($("out"), true);   // before render: the chart needs its laid-out width
+    render(res);
+  }
+
+  var fmtN = function (x, d) { return x.toFixed(d === undefined ? 2 : d); };
+
+  function render(res) {
+    var r = res.report, x = r.result;
+    $("title").textContent = r.capture.source + " · " + fmtN(r.capture.seconds, 1) + " s measured";
+    $("tiles").innerHTML = "";
+    [[fmtN(x.avgFps), "avg fps"], [fmtN(x.p95Ms), "p95 frame time (ms)"], [fmtN(x.low1Fps), "1% low fps"],
+     [String(x.stutters), "stutters (> 2.5 × median)"]].forEach(function (t) {
+      var d = document.createElement("div");
+      d.className = "tile";
+      d.innerHTML = '<div class="v"></div><div class="k"></div>';
+      d.firstChild.textContent = t[0];
+      d.lastChild.textContent = t[1];
+      $("tiles").appendChild(d);
+    });
+
+    var v = $("verdict");
+    v.innerHTML = "";
+    var b = x.busy, head = document.createElement("b"), why = document.createElement("span");
+    if (b) {
+      head.textContent = { gpu: "GPU-bound", cpu: "CPU-bound", mixed: "Mixed CPU/GPU", pacing: "Paced or capped" }[b.limit];
+      why.textContent = "CPU busy " + fmtN(b.cpuMs) + " ms · GPU busy " + fmtN(b.gpuMs) + " ms (medians) · GPU ≥ CPU on " +
+        Math.round(b.gpuBoundShare * 100) + "% of frames" +
+        (b.limit === "pacing" ? " · neither is busy for 75% of the frame: a frame cap, vsync or waits set the pace" : "");
+    } else {
+      head.textContent = "No CPU/GPU busy times";
+      why.textContent = "PresentMon 2 captures (CPUBusy, GPUBusy) or ftlog_frame_busy() add the CPU/GPU-bound verdict.";
+    }
+    v.appendChild(head); v.appendChild(why);
+
+    var rows = [
+      ["Frames", String(x.frames)], ["Average fps (time-weighted)", fmtN(x.avgFps)], ["Median frame time", fmtN(x.medianMs) + " ms"],
+      ["p95 / p99 frame time", fmtN(x.p95Ms) + " / " + fmtN(x.p99Ms) + " ms"], ["1% low", fmtN(x.low1Fps) + " fps"],
+      ["Stutters", String(x.stutters)], ["Longest frame", fmtN(x.maxMs) + " ms"],
+      ["Scene", r.scene || "—"], ["Profile / output", (FtReport.getDotted(r, "settings.profile") || "—") + " / " + (FtReport.getDotted(r, "settings.output") || "—")],
+      ["Capture", r.capture.tool]
+    ];
+    var t = $("table");
+    t.innerHTML = "";
+    rows.forEach(function (row) {
+      var tr = t.insertRow(), th = document.createElement("th");
+      th.textContent = row[0];
+      tr.appendChild(th);
+      tr.insertCell().textContent = row[1];
+    });
+
+    var c = $("checks");
+    c.innerHTML = "";
+    var li = document.createElement("li");
+    li.className = r.checks.valid ? "ok" : "bad";
+    li.textContent = r.checks.valid ? "✓ Valid: long enough, with profile and scene" : "✗ Not valid as a result yet";
+    c.appendChild(li);
+    r.checks.notes.forEach(function (n) {
+      var l = document.createElement("li");
+      var label = function (key) {
+        var el = form.elements[key];
+        return el && el.parentNode.firstChild ? el.parentNode.firstChild.textContent.trim() : key;
+      };
+      l.textContent = "• " + n.replace(/\(add it with --set ([\w.]+)=\.\.\.\)/, function (_, key) { return "(fill in " + label(key) + ")"; })
+        .replace(", pick one with --process", ", pick one under Process");
+      c.appendChild(l);
+    });
+
+    $("json").textContent = JSON.stringify(r, null, 2);
+    drawChart(res);
+  }
+
+  // ---- chart: frame time across the measured window, one series
+
+  var chart = { cols: null, geom: null };
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function niceStep(span, target) {
+    var raw = span / target, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p;
+    return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+  }
+
+  function drawChart(res) {
+    var cv = $("chart"), dpr = window.devicePixelRatio || 1;
+    var W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    var g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    var cap = res.capture, idx = res.window, x = res.report.result;
+    var pad = { l: 44, r: 92, t: 10, b: 26 }, pw = Math.max(10, W - pad.l - pad.r), ph = H - pad.t - pad.b;
+
+    var frames = idx.map(function (i) { return cap.frames[i]; });
+    var tEnd = [], acc = 0;
+    frames.forEach(function (f) { acc += f; tEnd.push(acc / 1000); });
+    var tMax = acc / 1000 || 1;
+    var yTop = Math.min(x.maxMs, Math.max(x.p99Ms * 1.3, x.medianMs * 2.6));
+    var step = niceStep(yTop, 4);
+    yTop = Math.ceil(yTop / step) * step;
+    var X = function (t) { return pad.l + t / tMax * pw; };
+    var Y = function (ms) { return pad.t + ph - Math.min(ms, yTop) / yTop * ph; };
+
+    g.font = "11px system-ui, sans-serif";
+    g.lineWidth = 1;
+    g.strokeStyle = css("--grid");
+    g.fillStyle = css("--text-muted");
+    g.textAlign = "right"; g.textBaseline = "middle";
+    for (var yv = 0; yv <= yTop + 1e-9; yv += step) {
+      var yy = Math.round(Y(yv)) + 0.5;
+      g.beginPath(); g.moveTo(pad.l, yy); g.lineTo(pad.l + pw, yy); g.stroke();
+      g.fillText(String(Math.round(yv * 10) / 10), pad.l - 6, yy);
+    }
+    g.textAlign = "center"; g.textBaseline = "top";
+    var xs = niceStep(tMax, 6);
+    for (var xv = 0; xv <= tMax + 1e-9; xv += xs) g.fillText(Math.round(xv) + " s", X(xv), pad.t + ph + 6);
+    g.save(); g.translate(10, pad.t + ph / 2); g.rotate(-Math.PI / 2); g.textBaseline = "middle";
+    g.fillText("ms", 0, 0); g.restore();
+
+    // per pixel column: min, max, mean
+    var ncol = Math.max(1, Math.floor(pw)), cols = [];
+    for (var c = 0; c < ncol; c++) cols.push(null);
+    frames.forEach(function (f, i) {
+      var c = Math.min(ncol - 1, Math.floor(tEnd[i] / tMax * ncol));
+      var o = cols[c] || (cols[c] = { min: f, max: f, sum: 0, n: 0, t: tEnd[i] });
+      if (f < o.min) o.min = f;
+      if (f > o.max) o.max = f;
+      o.sum += f; o.n++; o.t = tEnd[i];
+    });
+    var series = css("--series-1");
+    g.fillStyle = series; g.globalAlpha = 0.28;
+    cols.forEach(function (o, c) {
+      if (!o) return;
+      var y1 = Y(o.max), y2 = Y(o.min);
+      g.fillRect(pad.l + c, y1, 1, Math.max(1, y2 - y1));
+    });
+    g.globalAlpha = 1;
+    g.strokeStyle = series; g.lineWidth = 2; g.lineJoin = "round"; g.lineCap = "round";
+    g.beginPath();
+    var started = false;
+    cols.forEach(function (o, c) {
+      if (!o) return;
+      var px = pad.l + c + 0.5, py = Y(o.sum / o.n);
+      if (!started) { g.moveTo(px, py); started = true; } else g.lineTo(px, py);
+    });
+    g.stroke();
+
+    // reference lines with direct labels
+    g.lineWidth = 1; g.strokeStyle = css("--text-secondary"); g.fillStyle = css("--text-secondary");
+    g.textAlign = "left"; g.textBaseline = "middle";
+    var refs = [[x.medianMs, "median " + fmtN(x.medianMs, 1) + " ms"], [x.p95Ms, "p95 " + fmtN(x.p95Ms, 1) + " ms"]];
+    var lastY = null;
+    refs.forEach(function (rf) {
+      if (rf[0] > yTop) return;
+      var yy = Math.round(Y(rf[0])) + 0.5, ly = yy;
+      if (lastY !== null && Math.abs(lastY - ly) < 13) ly = lastY - 13;
+      g.beginPath(); g.moveTo(pad.l, yy); g.lineTo(pad.l + pw, yy); g.stroke();
+      g.fillText(rf[1], pad.l + pw + 6, ly);
+      lastY = ly;
+    });
+
+    var above = frames.filter(function (f) { return f > yTop; }).length;
+    $("caption").textContent = "Frame time across the measured window: line = mean per pixel column, band = fastest to slowest frame in it." +
+      (above ? " " + above + " frame" + (above > 1 ? "s" : "") + " above " + yTop + " ms run off the top." : "");
+    chart.cols = cols; chart.geom = { pad: pad, pw: pw, ph: ph, W: W };
+  }
+
+  $("chart").addEventListener("mousemove", function (ev) {
+    if (!chart.cols) return;
+    var rect = this.getBoundingClientRect(), g = chart.geom, c = Math.floor(ev.clientX - rect.left - g.pad.l), tip = $("tip");
+    var o = c >= 0 && c < chart.cols.length ? chart.cols[c] : null;
+    if (!o) { tip.style.display = "none"; return; }
+    tip.textContent = o.t.toFixed(1) + " s · mean " + (o.sum / o.n).toFixed(1) + " ms · slowest " + o.max.toFixed(1) +
+      " ms (" + (1000 / o.max).toFixed(1) + " fps) · " + o.n + " frame" + (o.n > 1 ? "s" : "");
+    tip.style.display = "block";
+    var left = g.pad.l + c + 12;
+    if (left + tip.offsetWidth > g.W) left = g.pad.l + c - tip.offsetWidth - 12;
+    tip.style.left = Math.max(0, left) + "px";
+    tip.style.top = (g.pad.t + 4) + "px";
+    drawChart(state.last);
+    var cv = this.getContext("2d"), dpr = window.devicePixelRatio || 1;
+    cv.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cv.strokeStyle = css("--text-secondary"); cv.lineWidth = 1;
+    cv.beginPath(); cv.moveTo(g.pad.l + c + 0.5, g.pad.t); cv.lineTo(g.pad.l + c + 0.5, g.pad.t + g.ph); cv.stroke();
+  });
+  $("chart").addEventListener("mouseleave", function () { $("tip").style.display = "none"; if (state.last) drawChart(state.last); });
+  window.addEventListener("resize", function () { if (state.last) drawChart(state.last); });
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () { if (state.last) drawChart(state.last); });
+
+  // ---- input
+
+  function load(text, name) {
+    state.text = text; state.name = name; state.prefilled = false; state.last = null;
+    form.reset();
+    run();
+  }
+
+  function readFile(file) {
+    if (!file) return;
+    var rd = new FileReader();
+    rd.onload = function () { load(String(rd.result), file.name); };
+    rd.onerror = function () { fail("Could not read " + file.name); };
+    rd.readAsText(file);
+  }
+
+  $("file").addEventListener("change", function () { readFile(this.files[0]); this.value = ""; });
+  var drop = $("drop");
+  ["dragenter", "dragover"].forEach(function (e) { drop.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.add("over"); }); });
+  ["dragleave", "drop"].forEach(function (e) { drop.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.remove("over"); }); });
+  drop.addEventListener("drop", function (ev) { readFile(ev.dataTransfer.files[0]); });
+  $("example").addEventListener("click", function () {
+    fetch("example.ftlog").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    }).then(function (t) { load(t, "example.ftlog"); }).catch(function (e) { fail("Could not load the example: " + e.message); });
+  });
+
+  var timer = null;
+  form.addEventListener("input", function (ev) {
+    if (ev.target.name === "scene") show($("customWrap"), ev.target.value === "custom");
+    clearTimeout(timer);
+    timer = setTimeout(run, 150);
+  });
+  form.addEventListener("submit", function (ev) { ev.preventDefault(); });
+
+  $("download").addEventListener("click", function () {
+    if (!state.last) return;
+    var blob = new Blob([JSON.stringify(state.last.report, null, 2) + "\n"], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = state.name.replace(/\.[^.]+$/, "") + ".report.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+  $("copy").addEventListener("click", function () {
+    if (!state.last || !navigator.clipboard) return;
+    var btn = this;
+    navigator.clipboard.writeText(JSON.stringify(state.last.report, null, 2)).then(function () {
+      btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy JSON"; }, 1200);
+    });
+  });
+})();
+</script>
+</body>
+</html>

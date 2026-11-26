@@ -11,24 +11,33 @@
   },
   "scene": "city-walk",
   "pc": {
-    "gpu": "Example GPU B"
+    "gpu": "Example GPU B",
+    "ramGB": 64
   },
   "capture": {
     "tool": "ftlog",
     "source": "pc-b.ftlog",
-    "seconds": 320.56,
+    "seconds": 320.51,
     "skippedSeconds": 30.0,
-    "fromMark": "loaded"
+    "fromMark": "loaded",
+    "ftreport": "0.1.0"
   },
   "result": {
-    "frames": 7086,
-    "avgFps": 22.11,
-    "medianMs": 45.02,
-    "p95Ms": 50.08,
-    "p99Ms": 52.22,
-    "low1Fps": 13.68,
-    "stutters": 17,
-    "maxMs": 157.89
+    "frames": 7084,
+    "avgFps": 22.1,
+    "medianMs": 45.06,
+    "p95Ms": 49.93,
+    "p99Ms": 52.14,
+    "low1Fps": 14.29,
+    "stutters": 15,
+    "maxMs": 147.47,
+    "busy": {
+      "frames": 7084,
+      "cpuMs": 41.25,
+      "gpuMs": 32.48,
+      "gpuBoundShare": 0.0,
+      "limit": "cpu"
+    }
   },
   "checks": {
     "valid": true,

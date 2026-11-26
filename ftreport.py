@@ -3,7 +3,7 @@
 
 Reads:
   * frame logs written by the ftlog recorders (frametime-log v1, see SPEC.md)
-  * PresentMon CSV (1.x "MsBetweenPresents" or 2.x "FrameTime")
+  * PresentMon CSV (1.x "MsBetweenPresents" or 2.x "FrameTime", with CPUBusy/GPUBusy)
   * CapFrameX CSV exports (PresentMon columns)
 
 Commands:
@@ -12,6 +12,9 @@ Commands:
   validate REPORT.json ...    check reports against the format
 
 Standard library only; Python 3.8 or newer.
+
+The browser page (docs/ftreport-core.js) implements the same arithmetic step by
+step; tests/test_parity.py checks that both produce identical reports.
 """
 
 import argparse
@@ -20,10 +23,10 @@ import io
 import json
 import math
 import os
-import statistics
+import re
 import sys
-from collections import Counter
 
+VERSION = "0.1.0"
 FORMAT = "frametime-report/0.1"
 LOG_MAGIC = "# frametime-log v1"
 LIKE_FOR_LIKE_KEYS = (
@@ -34,14 +37,75 @@ LIKE_FOR_LIKE_KEYS = (
     "scene",
 )
 FRAME_COLUMNS = ("MsBetweenPresents", "FrameTime", "msBetweenPresents")
+CPU_BUSY_COLUMNS = ("CPUBusy",)
+GPU_BUSY_COLUMNS = ("GPUBusy", "MsGPUActive", "msGPUActive")
 APP_COLUMNS = ("Application", "ProcessName")
 SWAPCHAIN_COLUMNS = ("SwapChainAddress", "SwapChain")
 STUTTER_FACTOR = 2.5
 REPRODUCE_TOLERANCE = 0.10
+BUSY_MIN_SHARE = 0.5      # busy analysis needs busy times on half of the window's frames
+PACING_FACTOR = 0.75      # neither CPU nor GPU busy for 75% of the frame: paced or capped
+GPU_BOUND_AT = 0.6
+CPU_BOUND_AT = 0.4
+
+NUMBER_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+INT_RE = re.compile(r"^[+-]?\d+$")
+LINE_RE = re.compile(r"\r\n|\r|\n")
 
 
 class FtError(Exception):
     pass
+
+
+# --------------------------------------------------------------------------
+# numbers: identical rules in ftreport-core.js
+
+def r2(x):
+    """Round to 2 decimals, half away from zero."""
+    v = math.floor(abs(x) * 100 + 0.5) / 100
+    return v if x >= 0 else -v
+
+
+def fmt0(x):
+    """Whole number for messages, half away from zero."""
+    return "%d" % math.floor(x + 0.5)
+
+
+def num(text):
+    """A plain decimal number, or None. No 'inf', 'nan', '1_000' or hex."""
+    t = (text or "").strip()
+    if not NUMBER_RE.match(t):
+        return None
+    v = float(t)
+    return v if math.isfinite(v) else None
+
+
+def total(values):
+    """Left-to-right sum, the same operation order as JavaScript."""
+    s = 0.0
+    for v in values:
+        s += v
+    return s
+
+
+def median(sorted_vals):
+    n = len(sorted_vals)
+    if n % 2:
+        return sorted_vals[n // 2]
+    return (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+
+
+def nearest_rank(sorted_vals, p):
+    n = len(sorted_vals)
+    k = max(1, math.ceil(p / 100.0 * n))
+    return sorted_vals[min(k, n) - 1]
+
+
+def split_lines(text):
+    lines = LINE_RE.split(text)
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 # --------------------------------------------------------------------------
@@ -55,15 +119,10 @@ def parse_value(text):
         return True
     if low in ("false", "no", "off"):
         return False
-    try:
-        if t and (t.lstrip("+-").isdigit()):
-            return int(t)
-        f = float(t)
-        if math.isfinite(f):
-            return f
-    except ValueError:
-        pass
-    return t
+    if INT_RE.match(t):
+        return int(t)
+    v = num(t)
+    return v if v is not None else t
 
 
 def set_dotted(d, key, value):
@@ -90,7 +149,24 @@ def get_dotted(d, key):
 
 
 # --------------------------------------------------------------------------
-# readers: each returns (frame_ms list, t_end_ms list, meta dict, marks dict, tool)
+# readers
+
+class Capture:
+    """Frames with their end times, optional CPU/GPU busy times, metadata and marks."""
+
+    def __init__(self, tool):
+        self.tool = tool
+        self.frames, self.ends, self.cpu, self.gpu = [], [], [], []
+        self.meta, self.marks, self.notes = {}, {}, []
+
+    def add(self, ms, end=None, cpu=None, gpu=None):
+        if end is None:
+            end = (self.ends[-1] if self.ends else 0.0) + ms
+        self.frames.append(ms)
+        self.ends.append(end)
+        self.cpu.append(cpu)
+        self.gpu.append(gpu)
+
 
 def read_text(path):
     with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
@@ -98,7 +174,7 @@ def read_text(path):
 
 
 def detect_format(text):
-    first = text.lstrip().splitlines()[0] if text.strip() else ""
+    first = next((l for l in split_lines(text) if l.strip()), "")
     if first.strip().lower() == LOG_MAGIC:
         return "ftlog"
     head = text[:20000]
@@ -107,11 +183,16 @@ def detect_format(text):
     raise FtError("unknown input format (expected '%s' or a PresentMon/CapFrameX CSV)" % LOG_MAGIC)
 
 
+def busy_value(text):
+    v = num(text)
+    return v if v is not None and v >= 0 else None
+
+
 def read_ftlog(text):
-    frames, ends, meta, marks = [], [], {}, {}
-    lines = text.splitlines()
+    lines = split_lines(text)
     if not lines or lines[0].strip().lower() != LOG_MAGIC:
         raise FtError("not a frametime-log v1 file")
+    cap = Capture("ftlog")
     for no, raw in enumerate(lines[1:], start=2):
         line = raw.strip()
         if not line:
@@ -123,37 +204,43 @@ def read_ftlog(text):
                 if "=" not in kv:
                     raise FtError("line %d: meta needs key=value" % no)
                 k, v = kv.split("=", 1)
-                set_dotted(meta, k, parse_value(v))
+                set_dotted(cap.meta, k, parse_value(v))
             elif body.startswith("mark "):
                 bits = body[5:].split(None, 1)
                 if len(bits) != 2:
                     raise FtError("line %d: mark needs '<t_ms> <label>'" % no)
-                try:
-                    marks.setdefault(bits[1].strip(), float(bits[0]))
-                except ValueError:
+                t = num(bits[0])
+                if t is None:
                     raise FtError("line %d: bad mark time" % no)
+                label = bits[1].strip()
+                if label not in cap.marks:
+                    cap.marks[label] = t
             continue
         if line.lower().startswith("t_ms"):
             continue
         parts = line.split(",")
-        try:
-            if len(parts) >= 2:
-                t, ms = float(parts[0]), float(parts[1])
-            else:
-                t, ms = None, float(parts[0])
-        except ValueError:
-            raise FtError("line %d: expected '<t_ms>,<frame_ms>'" % no)
-        if not (math.isfinite(ms) and ms > 0):
+        if len(parts) >= 2:
+            t, ms = num(parts[0]), num(parts[1])
+            if t is None or ms is None:
+                raise FtError("line %d: expected '<t_ms>,<frame_ms>[,<cpu_ms>,<gpu_ms>]'" % no)
+        else:
+            t, ms = None, num(parts[0])
+            if ms is None:
+                raise FtError("line %d: expected '<t_ms>,<frame_ms>'" % no)
+        if ms <= 0:
             continue
-        if t is None:
-            t = (ends[-1] if ends else 0.0) + ms
-        frames.append(ms)
-        ends.append(t)
-    return frames, ends, meta, marks, "ftlog"
+        cpu = busy_value(parts[2]) if len(parts) > 2 else None
+        gpu = busy_value(parts[3]) if len(parts) > 3 else None
+        cap.add(ms, t, cpu, gpu)
+    return cap
+
+
+def csv_rows(lines):
+    return list(csv.reader(io.StringIO("\n".join(lines))))
 
 
 def read_presentmon(text, process=None, column=None):
-    lines = text.splitlines()
+    lines = split_lines(text)
     start = None
     for i, l in enumerate(lines):
         if any(c in l for c in FRAME_COLUMNS) or (column and column in l):
@@ -161,161 +248,239 @@ def read_presentmon(text, process=None, column=None):
             break
     if start is None:
         raise FtError("no PresentMon header row found")
-    reader = csv.DictReader(io.StringIO("\n".join(lines[start:])))
-    fields = reader.fieldnames or []
+    rows = csv_rows(lines[start:])
+    fields = [f.strip() for f in rows[0]] if rows else []
     col = column if column else next((c for c in FRAME_COLUMNS if c in fields), None)
     if not col or col not in fields:
         raise FtError("frame-time column not found (have: %s)" % ", ".join(fields[:12]))
-    app_col = next((c for c in APP_COLUMNS if c in fields), None)
-    sc_col = next((c for c in SWAPCHAIN_COLUMNS if c in fields), None)
 
-    rows = []
-    for r in reader:
-        v = (r.get(col) or "").strip()
-        try:
-            ms = float(v)
-        except ValueError:
+    def index_of(names):
+        for n in names:
+            if n in fields:
+                return fields.index(n)
+        return None
+
+    i_ms = fields.index(col)
+    i_app, i_sc = index_of(APP_COLUMNS), index_of(SWAPCHAIN_COLUMNS)
+    i_cpu, i_gpu = index_of(CPU_BUSY_COLUMNS), index_of(GPU_BUSY_COLUMNS)
+
+    def cell(row, i):
+        return row[i] if i is not None and i < len(row) else ""
+
+    data = []
+    for row in rows[1:]:
+        ms = num(cell(row, i_ms))
+        if ms is None or ms <= 0:
             continue
-        if not (math.isfinite(ms) and ms > 0):
-            continue
-        rows.append((r.get(app_col, "") if app_col else "", r.get(sc_col, "") if sc_col else "", ms))
-    if not rows:
+        data.append((cell(row, i_app), cell(row, i_sc), ms,
+                     busy_value(cell(row, i_cpu)), busy_value(cell(row, i_gpu))))
+    if not data:
         raise FtError("no frame rows in column %s" % col)
 
-    notes = []
-    if app_col:
-        apps = Counter(a for a, _, _ in rows)
+    cap = Capture("presentmon:" + col)
+    if i_app is not None:
+        apps = count_in_order(d[0] for d in data)
         if process:
             want = process.lower()
-            rows = [x for x in rows if x[0].lower() == want]
-            if not rows:
+            data = [d for d in data if d[0].lower() == want]
+            if not data:
                 raise FtError("process %r not in log (have: %s)" % (process, ", ".join(sorted(apps))))
         elif len(apps) > 1:
-            pick = apps.most_common(1)[0][0]
-            rows = [x for x in rows if x[0] == pick]
-            notes.append("several processes in log; used %s (most frames), pick one with --process" % pick)
-    if sc_col:
-        chains = Counter(s for _, s, _ in rows)
+            pick = most_common(apps)
+            data = [d for d in data if d[0] == pick]
+            cap.notes.append("several processes in log; used %s (most frames), pick one with --process" % pick)
+    if i_sc is not None:
+        chains = count_in_order(d[1] for d in data)
         if len(chains) > 1:
-            pick = chains.most_common(1)[0][0]
-            rows = [x for x in rows if x[1] == pick]
-            notes.append("several swap chains; used the one with most frames")
+            pick = most_common(chains)
+            data = [d for d in data if d[1] == pick]
+            cap.notes.append("several swap chains; used the one with most frames")
 
-    frames, ends, t = [], [], 0.0
-    for _, _, ms in rows:
-        t += ms
-        frames.append(ms)
-        ends.append(t)
-    meta = {}
-    if app_col and rows and rows[0][0]:
-        meta["app"] = rows[0][0]
-    return frames, ends, meta, {}, "presentmon:" + col, notes
+    for _, _, ms, cpu, gpu in data:
+        cap.add(ms, None, cpu, gpu)
+    if i_app is not None and data[0][0]:
+        cap.meta["app"] = data[0][0]
+    return cap
+
+
+def count_in_order(items):
+    counts = {}
+    for x in items:
+        counts[x] = counts.get(x, 0) + 1
+    return counts
+
+
+def most_common(counts):
+    best, best_n = None, -1
+    for k, n in counts.items():   # insertion order: ties go to the first seen
+        if n > best_n:
+            best, best_n = k, n
+    return best
 
 
 # --------------------------------------------------------------------------
-# statistics
+# window and statistics
 
-def nearest_rank(sorted_vals, p):
-    n = len(sorted_vals)
-    k = max(1, math.ceil(p / 100.0 * n))
-    return sorted_vals[min(k, n) - 1]
+def window(cap, skip_s, from_mark, max_s):
+    """Indices of the frames in the measured window."""
+    start_ms = 0.0
+    if from_mark:
+        if from_mark not in cap.marks:
+            raise FtError("mark %r not in log (have: %s)" % (from_mark, ", ".join(sorted(cap.marks)) or "none"))
+        start_ms = cap.marks[from_mark]
+    start_ms += skip_s * 1000.0
+    idx = [i for i in range(len(cap.frames)) if cap.ends[i] - cap.frames[i] >= start_ms - 1e-9]
+    if max_s:
+        out, acc = [], 0.0
+        for i in idx:
+            if acc + cap.frames[i] > max_s * 1000.0 + 1e-9:
+                break
+            acc += cap.frames[i]
+            out.append(i)
+        idx = out
+    return idx
 
 
 def compute(frames):
     n = len(frames)
     if n == 0:
         raise FtError("no frames in the measured window")
-    total = sum(frames)
+    sum_ms = total(frames)
     s = sorted(frames)
-    median = statistics.median(s)
-    worst = s[-max(1, math.ceil(0.01 * n)):]
-    r2 = lambda x: round(x, 2)
+    med = median(s)
+    k = max(1, math.ceil(0.01 * n))
+    worst = s[n - k:]
+    stutters = 0
+    for x in frames:
+        if x > STUTTER_FACTOR * med:
+            stutters += 1
     return {
         "frames": n,
-        "avgFps": r2(n / (total / 1000.0)),
-        "medianMs": r2(median),
+        "avgFps": r2(n / (sum_ms / 1000.0)),
+        "medianMs": r2(med),
         "p95Ms": r2(nearest_rank(s, 95)),
         "p99Ms": r2(nearest_rank(s, 99)),
-        "low1Fps": r2(1000.0 / (sum(worst) / len(worst))),
-        "stutters": sum(1 for x in frames if x > STUTTER_FACTOR * median),
+        "low1Fps": r2(1000.0 / (total(worst) / k)),
+        "stutters": stutters,
         "maxMs": r2(s[-1]),
-    }, total / 1000.0
+    }, sum_ms / 1000.0
 
 
-def window(frames, ends, skip_s, marks, from_mark, max_s):
-    start_ms = 0.0
-    if from_mark:
-        if from_mark not in marks:
-            raise FtError("mark %r not in log (have: %s)" % (from_mark, ", ".join(sorted(marks)) or "none"))
-        start_ms = marks[from_mark]
-    start_ms += skip_s * 1000.0
-    sel = [(f, e) for f, e in zip(frames, ends) if e - f >= start_ms - 1e-9]
-    if max_s:
-        out, acc = [], 0.0
-        for f, e in sel:
-            if acc + f > max_s * 1000.0 + 1e-9:
-                break
-            acc += f
-            out.append((f, e))
-        sel = out
-    return [f for f, _ in sel]
+def analyze_busy(frames, cpu, gpu):
+    """CPU vs GPU busy time per frame -> what limits the frame rate. None without data."""
+    both = [i for i in range(len(frames)) if cpu[i] is not None and gpu[i] is not None]
+    if not frames or len(both) < BUSY_MIN_SHARE * len(frames):
+        return None
+    c = sorted(cpu[i] for i in both)
+    g = sorted(gpu[i] for i in both)
+    f = sorted(frames[i] for i in both)
+    cpu_med, gpu_med, frame_med = median(c), median(g), median(f)
+    gpu_first = 0
+    for i in both:
+        if gpu[i] >= cpu[i]:
+            gpu_first += 1
+    share = gpu_first / len(both)
+    if max(cpu_med, gpu_med) < PACING_FACTOR * frame_med:
+        limit = "pacing"
+    elif share >= GPU_BOUND_AT:
+        limit = "gpu"
+    elif share <= CPU_BOUND_AT:
+        limit = "cpu"
+    else:
+        limit = "mixed"
+    return {
+        "frames": len(both),
+        "cpuMs": r2(cpu_med),
+        "gpuMs": r2(gpu_med),
+        "gpuBoundShare": r2(share),
+        "limit": limit,
+    }
 
 
 # --------------------------------------------------------------------------
-# commands
+# report
 
-def build_report(args):
-    text = read_text(args.log)
-    fmt = args.format if args.format != "auto" else detect_format(text)
-    notes = []
+def default_options():
+    return {
+        "format": "auto", "process": None, "column": None, "skip": 30.0, "fromMark": None,
+        "maxSeconds": 0.0, "minSeconds": 180.0, "require": ["settings.profile", "scene"], "set": [],
+    }
+
+
+def build_report_from_text(text, source, opts):
+    """The whole pipeline; ftreport-core.js buildReport() mirrors it."""
+    o = default_options()
+    o.update({k: v for k, v in opts.items() if v is not None})
+    fmt = o["format"] if o["format"] != "auto" else detect_format(text)
     if fmt == "ftlog":
-        frames, ends, meta, marks, tool = read_ftlog(text)
+        cap = read_ftlog(text)
     elif fmt in ("presentmon", "capframex"):
-        frames, ends, meta, marks, tool, notes = read_presentmon(text, args.process, args.column)
+        cap = read_presentmon(text, o["process"], o["column"])
         if fmt == "capframex":
-            tool = tool.replace("presentmon", "capframex", 1)
+            cap.tool = cap.tool.replace("presentmon", "capframex", 1)
     else:
         raise FtError("unknown format %s" % fmt)
 
-    for item in args.set or []:
+    for item in o["set"]:
         if "=" not in item:
             raise FtError("--set needs key=value, got %r" % item)
         k, v = item.split("=", 1)
-        set_dotted(meta, k, parse_value(v))
+        set_dotted(cap.meta, k, parse_value(v))
 
-    if fmt != "ftlog" and args.from_mark:
+    if fmt != "ftlog" and o["fromMark"]:
         raise FtError("--from-mark only works with frame logs")
-    sel = window(frames, ends, args.skip, marks, args.from_mark, args.max_seconds)
-    result, seconds = compute(sel)
+    idx = window(cap, o["skip"], o["fromMark"], o["maxSeconds"])
+    frames = [cap.frames[i] for i in idx]
+    result, seconds = compute(frames)
+    busy = analyze_busy(frames, [cap.cpu[i] for i in idx], [cap.gpu[i] for i in idx])
+    if busy:
+        result["busy"] = busy
 
     report = {"format": FORMAT}
     for k in ("app", "build", "settings", "scene", "pc"):
-        if k in meta:
-            report[k] = meta[k]
-    for k, v in meta.items():
+        if k in cap.meta:
+            report[k] = cap.meta[k]
+    for k, v in cap.meta.items():
         if k not in report and k not in ("format", "capture", "result", "checks"):
             report[k] = v
     report["capture"] = {
-        "tool": tool,
-        "source": os.path.basename(args.log),
-        "seconds": round(seconds, 2),
-        "skippedSeconds": args.skip,
-        "fromMark": args.from_mark,
+        "tool": cap.tool,
+        "source": source,
+        "seconds": r2(seconds),
+        "skippedSeconds": o["skip"],
+        "fromMark": o["fromMark"],
+        "ftreport": VERSION,
     }
     report["result"] = result
 
     problems = []
-    if seconds < args.min_seconds:
-        problems.append("window is %.0f s, shorter than the %.0f s minimum" % (seconds, args.min_seconds))
+    if seconds < o["minSeconds"]:
+        problems.append("window is %s s, shorter than the %s s minimum" % (fmt0(seconds), fmt0(o["minSeconds"])))
     if result["frames"] < 100:
         problems.append("only %d frames in the window" % result["frames"])
-    for key in args.require.split(",") if args.require else []:
+    for key in o["require"]:
         key = key.strip()
         if key and get_dotted(report, key) is None:
             problems.append("missing %s (add it with --set %s=...)" % (key, key))
-    report["checks"] = {"valid": not problems, "notes": problems + notes}
+    report["checks"] = {"valid": not problems, "notes": problems + cap.notes}
     return report
 
+
+def options_from_args(args):
+    return {
+        "format": args.format, "process": args.process, "column": args.column, "skip": args.skip,
+        "fromMark": args.from_mark, "maxSeconds": args.max_seconds, "minSeconds": args.min_seconds,
+        "require": [k for k in args.require.split(",") if k.strip()] if args.require else [],
+        "set": args.set or [],
+    }
+
+
+def build_report(args):
+    return build_report_from_text(read_text(args.log), os.path.basename(args.log), options_from_args(args))
+
+
+# --------------------------------------------------------------------------
+# commands
 
 def fmt_settings(r):
     s = r.get("settings") or {}
@@ -327,15 +492,24 @@ def fmt_settings(r):
     return " ".join(bits)
 
 
+def busy_line(b):
+    what = {"gpu": "GPU-bound", "cpu": "CPU-bound", "mixed": "mixed CPU/GPU",
+            "pacing": "paced or capped (neither busy most of the frame)"}[b["limit"]]
+    return "cpu busy %.2f ms | gpu busy %.2f ms | gpu >= cpu on %s%% of frames | %s" % (
+        b["cpuMs"], b["gpuMs"], fmt0(b["gpuBoundShare"] * 100), what)
+
+
 def cmd_summarize(args):
     report = build_report(args)
     res = report["result"]
     print("%s  |  %s  |  scene %s" % (report["capture"]["source"], fmt_settings(report), report.get("scene", "?")))
-    print("  %d frames over %.1f s (skipped %.0f s%s)" % (
-        res["frames"], report["capture"]["seconds"], args.skip,
+    print("  %d frames over %.1f s (skipped %s s%s)" % (
+        res["frames"], report["capture"]["seconds"], fmt0(args.skip),
         ", from mark %s" % args.from_mark if args.from_mark else ""))
     print("  avg %.2f fps | median %.2f ms | p95 %.2f ms | p99 %.2f ms | 1%% low %.2f fps | stutters %d | max %.2f ms" % (
         res["avgFps"], res["medianMs"], res["p95Ms"], res["p99Ms"], res["low1Fps"], res["stutters"], res["maxMs"]))
+    if "busy" in res:
+        print("  " + busy_line(res["busy"]))
     print("  valid: %s" % ("yes" if report["checks"]["valid"] else "NO"))
     for n in report["checks"]["notes"]:
         print("  note: %s" % n)
@@ -370,6 +544,9 @@ def validate_report(r):
         for k in ("frames", "avgFps", "medianMs", "p95Ms", "p99Ms", "low1Fps", "stutters"):
             if not isinstance(res.get(k), (int, float)) or isinstance(res.get(k), bool):
                 errs.append("result.%s missing or not a number" % k)
+        b = res.get("busy")
+        if b is not None and (not isinstance(b, dict) or b.get("limit") not in ("gpu", "cpu", "mixed", "pacing")):
+            errs.append("result.busy is malformed")
     cap = r.get("capture")
     if not isinstance(cap, dict) or not isinstance(cap.get("seconds"), (int, float)):
         errs.append("capture.seconds missing")
@@ -393,7 +570,7 @@ def cmd_validate(args):
 
 def cmd_compare(args):
     reps = [(os.path.basename(p), load_report(p)) for p in args.reports]
-    head = ("report", "commit", "settings", "scene", "avg fps", "p95 ms", "1% low", "stutters", "secs", "valid")
+    head = ("report", "commit", "settings", "scene", "avg fps", "p95 ms", "1% low", "stutters", "limit", "secs", "valid")
     rows = []
     for name, r in reps:
         res = r.get("result", {})
@@ -406,7 +583,8 @@ def cmd_compare(args):
             "%.2f" % res.get("p95Ms", float("nan")),
             "%.2f" % res.get("low1Fps", float("nan")),
             str(res.get("stutters", "?")),
-            "%.0f" % (get_dotted(r, "capture.seconds") or 0),
+            str(get_dotted(res, "busy.limit") or "-"),
+            fmt0(get_dotted(r, "capture.seconds") or 0),
             "yes" if get_dotted(r, "checks.valid") else "no",
         ))
     widths = [max(len(h), *(len(row[i]) for row in rows)) for i, h in enumerate(head)]
@@ -436,6 +614,7 @@ def cmd_compare(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ftreport", description="Comparable frame-time reports (frametime-report/0.1).")
+    ap.add_argument("--version", action="version", version="ftreport " + VERSION)
     sub = ap.add_subparsers(dest="cmd")
 
     s = sub.add_parser("summarize", help="summarize a frame log or PresentMon/CapFrameX CSV")

@@ -37,7 +37,8 @@ int main(void)
         /* every 50th frame is far slower, so it counts as a stutter even on
            machines whose sleeps overshoot a lot (CI runners) */
         SLEEP_MS(i % 50 == 49 ? 200 : 8);
-        ftlog_frame();
+        if (i < 10) ftlog_frame();
+        else ftlog_frame_busy(5.0, 7.5);
     }
     ftlog_mark(NULL);
     ftlog_close();
