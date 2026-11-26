@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: ftreport (Python ${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, python: "3.8" }
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.13" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -I -W error::ResourceWarning -m unittest discover -s tests -v
+
+  rust:
+    name: Rust recorder (${{ matrix.toolchain }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        toolchain: ["1.70.0", stable]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: cargo build --release --manifest-path recorders/rust/demo/Cargo.toml
+        env:
+          RUSTFLAGS: -D warnings
+      - name: Off without FTLOG
+        run: |
+          recorders/rust/demo/target/release/ftlog-demo | grep "enabled: false"
+          test -z "$(ls *.ftlog 2>/dev/null)"
+      - name: Record and check
+        run: |
+          FTLOG="$PWD/rust.ftlog" recorders/rust/demo/target/release/ftlog-demo
+          python -I tests/check_demo_log.py rust.ftlog
+
+  c-unix:
+    name: C recorder (${{ matrix.compiler }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, compiler: gcc, cxx: g++ }
+          - { os: ubuntu-latest, compiler: clang, cxx: clang++ }
+          - { os: macos-latest, compiler: clang, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build C99 and C++11
+        run: |
+          W="-Wall -Wextra -Werror -pedantic"
+          ${{ matrix.compiler }} -std=c99 -D_POSIX_C_SOURCE=199309L $W recorders/c/demo/main.c recorders/c/demo/impl.c -o cdemo
+          ${{ matrix.cxx }} -x c++ -std=c++11 $W recorders/c/demo/main.c recorders/c/demo/impl.c -o cxxdemo
+      - name: Record and check
+        run: |
+          ./cdemo | grep "enabled: 0"
+          FTLOG="$PWD/c.ftlog" ./cdemo
+          FTLOG="$PWD/cxx.ftlog" ./cxxdemo
+          python -I tests/check_demo_log.py c.ftlog
+          python -I tests/check_demo_log.py cxx.ftlog
+
+  c-msvc:
+    name: C recorder (MSVC, windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build C and C++
+        shell: cmd
+        run: |
+          cl /nologo /W4 /WX recorders\c\demo\main.c recorders\c\demo\impl.c /Fe:cdemo.exe || exit /b 1
+          cl /nologo /W4 /WX /TP /EHsc recorders\c\demo\main.c recorders\c\demo\impl.c /Fe:cxxdemo.exe || exit /b 1
+      - name: Record and check
+        shell: bash
+        run: |
+          ./cdemo.exe | grep "enabled: 0"
+          FTLOG="$(cygpath -w "$PWD/c.ftlog")" ./cdemo.exe
+          FTLOG="$(cygpath -w "$PWD/cxx.ftlog")" ./cxxdemo.exe
+          python -I tests/check_demo_log.py c.ftlog
+          python -I tests/check_demo_log.py cxx.ftlog

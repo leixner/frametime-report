@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+
+# demo builds
+target/
+recorders/rust/demo/Cargo.lock
+*.exe
+*.obj
+*.pdb
+/cdemo
+/cxxdemo
+
+# logs and reports from local runs (the examples are kept)
+*.ftlog
+*.report.json
+!examples/*.ftlog
+!examples/*.report.json

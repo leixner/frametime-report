@@ -1,0 +1,124 @@
+# frametime-report: formats (v0.1)
+
+There are two formats:
+
+- **frame log** (`.ftlog`): written while an application runs. It's a plain text file, one line per frame.
+- **report** (`.json`): written by `ftreport summarize` from a frame log or a PresentMon/CapFrameX CSV.
+
+Both are independent of any particular application, engine or graphics API.
+
+---
+
+## 1. Frame log (`frametime-log v1`)
+
+UTF-8 text with `\n` line endings. Lines starting with `#` are header or annotation lines. Every other non-empty line is one frame.
+
+```
+# frametime-log v1
+# meta settings.profile=series-x
+# meta settings.output=1920x1080
+# meta settings.raytracing=false
+# meta build.repo=owner/name
+# meta build.commit=abc1234
+t_ms,frame_ms
+16.71,16.710
+33.40,16.690
+# mark 31250.00 loaded
+...
+```
+
+| Line | Meaning |
+|---|---|
+| `# frametime-log v1` | Must be the first line. |
+| `# meta <key>=<value>` | Metadata. The key is a dotted path into the report, such as `settings.profile`. It may appear anywhere, and later values win. |
+| `# mark <t_ms> <label>` | A named point in time, such as `loaded` or `scene-start`. Labels contain no spaces. |
+| `t_ms,frame_ms` | Column header for the frame lines. Optional. |
+| `<t_ms>,<frame_ms>` | One frame. `t_ms` is the time since logging started at the end of the frame, in milliseconds. `frame_ms` is the time since the previous frame ended. |
+
+**What counts as a frame:** one presented image, measured on the host between consecutive present or swap calls on one swap chain. Recorders measure with a monotonic clock (`QueryPerformanceCounter`, `std::time::Instant`, `CLOCK_MONOTONIC`).
+
+**Recommended metadata keys** (all optional):
+
+| Key | Example |
+|---|---|
+| `app` | free text |
+| `build.repo` | `owner/name` |
+| `build.commit` | `abc1234` |
+| `settings.profile` | `series-x`, `series-s`, or any short id |
+| `settings.output` | `1920x1080` |
+| `settings.internal` | `1280x720` |
+| `settings.raytracing` | `true` / `false` |
+| `settings.upscaler` | `none`, `fsr2`, `fsr4`, … |
+| `settings.fpsCap` | `30`, `60`, `0` (none) |
+| `scene` | see the scene list below |
+| `pc.cpu` / `pc.gpu` / `pc.ramGB` / `pc.driver` / `pc.os` | free text / number |
+
+The application usually knows `build.*` and `settings.*`. The person testing adds `scene` and `pc.*` with `ftreport summarize --set`.
+
+## 2. Report (`frametime-report/0.1`)
+
+```json
+{
+  "format": "frametime-report/0.1",
+  "app": "…",
+  "build":    { "repo": "owner/name", "commit": "abc1234" },
+  "settings": { "profile": "series-x", "output": "1920x1080", "internal": "1920x1080",
+                "raytracing": false, "upscaler": "none", "fpsCap": 30 },
+  "scene":    "city-walk",
+  "pc":       { "cpu": "…", "gpu": "…", "ramGB": 64, "driver": "…", "os": "…" },
+  "capture":  { "tool": "ftlog", "source": "run.ftlog", "seconds": 300.0,
+                "skippedSeconds": 30.0, "fromMark": null },
+  "result":   { "frames": 6912, "avgFps": 23.04, "medianMs": 43.1, "p95Ms": 47.0,
+                "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "maxMs": 180.2 },
+  "checks":   { "valid": true, "notes": [] }
+}
+```
+
+### Definitions
+
+The **measured window** is every frame after the skip point. The skip point is `--skip` seconds (default 30) after the start, or after the mark given with `--from-mark`. `--max-seconds` can shorten the window.
+
+| Field | Definition |
+|---|---|
+| `capture.seconds` | Sum of `frame_ms` in the window ÷ 1000 |
+| `frames` | Number of frames in the window |
+| `avgFps` | `frames ÷ capture.seconds`. This is the time-weighted average, **not** the mean of per-frame fps values. |
+| `medianMs` | Median frame time |
+| `p95Ms`, `p99Ms` | Nearest-rank percentiles of frame time: sort ascending, take element `ceil(p/100 × n)`, counting from 1 |
+| `low1Fps` | `1000 ÷ mean(the slowest ceil(1% × n) frame times)` |
+| `stutters` | Number of frames longer than `2.5 × medianMs` |
+| `maxMs` | Longest frame |
+
+All values are rounded to 2 decimals.
+
+### Validity checks
+
+`checks.valid` is `false`, with a note for each failed check, when:
+
+- the window is shorter than `--min-seconds` (default 180);
+- fewer than 100 frames remain;
+- `--require` names a field that is missing. The default requires `settings.profile` and `scene`.
+
+An invalid report is still written. It just shouldn't be counted as a result.
+
+### Comparing reports
+
+Two reports are **like for like** when `settings.profile`, `settings.output`, `settings.raytracing`, `settings.upscaler` and `scene` are equal.
+
+Two like-for-like reports on the same `build.commit` from different PCs or people **reproduce** each other when their `avgFps` are within 10% of each other.
+
+## 3. Scene ids
+
+Keep the list small, so results can be grouped:
+
+| Scene | What it covers |
+|---|---|
+| `menu` | menus, front end |
+| `interior` | indoors, on foot |
+| `city-walk` | outdoors in a town or city, on foot, turning the camera |
+| `city-drive` | driving through a town or city |
+| `open-drive` | driving outside towns |
+| `boat` | on water |
+| `flight` | in the air |
+| `chase` | heavy traffic and crowds, fast movement |
+| `custom:<name>` | anything else |
