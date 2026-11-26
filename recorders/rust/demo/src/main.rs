@@ -17,7 +17,9 @@ fn main() {
         if i == 20 {
             ftlog::mark("loaded scene");
         }
-        thread::sleep(Duration::from_millis(if i % 50 == 49 { 40 } else { 8 }));
+        // every 50th frame is far slower, so it counts as a stutter even on
+        // machines whose sleeps overshoot a lot (CI runners)
+        thread::sleep(Duration::from_millis(if i % 50 == 49 { 200 } else { 8 }));
         ftlog::frame();
     }
     let threads: Vec<_> = (0..4)

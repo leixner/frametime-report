@@ -34,7 +34,9 @@ int main(void)
     ftlog_meta("empty", NULL);
     for (i = 0; i < 120; ++i) {
         if (i == 20) ftlog_mark("loaded scene");
-        SLEEP_MS(i % 50 == 49 ? 40 : 8);
+        /* every 50th frame is far slower, so it counts as a stutter even on
+           machines whose sleeps overshoot a lot (CI runners) */
+        SLEEP_MS(i % 50 == 49 ? 200 : 8);
         ftlog_frame();
     }
     ftlog_mark(NULL);
