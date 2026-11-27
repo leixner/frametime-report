@@ -8,17 +8,21 @@ Frame-rate numbers you can compare.
 
 - the time-weighted average fps;
 - median, p95 and p99 frame times;
-- 1% lows and stutter count;
+- 1% lows, stutters (relative hitches) and freezes (frames over 200 ms);
 - **whether the run was CPU-bound, GPU-bound or capped**, when CPU and GPU busy times are available;
+- **CPU, RAM, GPU and VRAM usage** during the run, and the hardware it ran on, recorded automatically on Windows;
 - the settings and scene it was measured in, and whether the run was long enough to count.
 
 It doesn't depend on any particular application, engine or graphics API. It works for games, emulators, compatibility layers and ports.
 
 ```
 pc-b.ftlog  |  series-x 1920x1080  |  scene city-walk
-  7084 frames over 320.5 s (skipped 30 s, from mark loaded)
-  avg 22.10 fps | median 45.06 ms | p95 49.93 ms | p99 52.14 ms | 1% low 14.29 fps | stutters 15 | max 147.47 ms
-  cpu busy 41.25 ms | gpu busy 32.48 ms | gpu >= cpu on 0% of frames | CPU-bound
+  7085 frames over 320.7 s (skipped 30 s, from mark loaded)
+  avg 22.09 fps | median 44.99 ms | p95 50.00 ms | p99 51.98 ms | 1% low 12.86 fps | max 305.49 ms
+  stutters 16 (> 2.5 x median) | freezes 3 (> 200 ms)
+  cpu busy 41.12 ms | gpu busy 32.47 ms | gpu >= cpu on 0% of frames | CPU-bound
+  usage (median, 641 samples): cpu 11% (peak 17) | ram 9898 MB (peak 10034) | gpu 71% (peak 77) | vram 9400 MB (peak 9497) | system cpu 38% (peak 47) | system ram 81% (peak 82)
+  pc: Example CPU B 6-Core | Example GPU B 12 GB | 32 GB RAM | Windows 10 (build 19045, 22H2)
   valid: yes
 ```
 
@@ -120,6 +124,36 @@ ftlog_close();                         // optional, at shutdown
 
 It isn't thread-safe: call it from the present thread or guard it yourself. Numbers are written without `printf("%f")`, so the C locale can't turn decimal points into commas.
 
+### Hardware and usage (Windows)
+
+With recording on, both recorders write the hardware names once from a background thread: CPU, GPU and its memory, driver, RAM, Windows version and logical cores. Model names only, nothing that identifies a person or a machine.
+
+Set `FTLOG_SAMPLE=1` (every 500 ms) or `FTLOG_SAMPLE=<ms>` (100 to 10000) to also sample usage on that thread:
+- this process's CPU % and memory;
+- GPU % of the busiest engine, the same figure Task Manager shows;
+- dedicated VRAM in use;
+- system CPU % and memory load.
+
+It reads Windows' own counters, so it works on NVIDIA, AMD and Intel without vendor SDKs, and loads everything beyond kernel32 at run time: nothing to link. On Linux and macOS the Rust recorder writes the OS and core count; usage sampling is Windows-only for now.
+
+```powershell
+$env:FTLOG = "C:\logs\run.ftlog"; $env:FTLOG_SAMPLE = "1"
+```
+
+### Overhead
+
+Measured with the Rust demo (`ftlog-demo bench` and `ftlog-demo idle`) on a Ryzen 7 5700X with an RTX 3070, Windows 11, release build:
+
+| | Cost |
+|---|---|
+| `frame()`, recording off | 2.4 ns per call: one check |
+| `frame()`, recording on | about 170 ns per call: about 10 µs per second at 60 fps |
+| Hardware names | once, on a background thread |
+| Usage sampler, setup | about 280 ms of CPU once, on its own thread (Windows opens the GPU counters) |
+| Usage sampler, each sample | about 0.4 ms of CPU on its own thread: 0.08% of one core at 2 samples per second |
+
+The thread that calls `frame()` never waits for the sampler: the sampler collects outside the lock and holds it only to write one line. GPU % was checked against Task Manager's method under full load: 99.8 to 100% from the sampler vs 99 to 100% read independently.
+
 ### Busy times
 
 Pass whatever you already measure:
@@ -148,7 +182,9 @@ Call it once per image actually handed to the display, on the host side: after `
 | `medianMs` | median frame time |
 | `p95Ms`, `p99Ms` | 95% and 99% of frames are this fast or faster (nearest-rank) |
 | `low1Fps` | fps over the slowest 1% of frames |
-| `stutters` | frames longer than 2.5 × the median |
+| `stutters` | frames longer than 2.5 × the median: hitches relative to the run's own pace |
+| `freezes` | frames longer than 200 ms: hangs you notice at any frame rate (same threshold as KLBF's BM-v1) |
+| `usage` | median and peak of the sampled CPU, RAM, GPU, VRAM and system load during the measured window |
 | `busy.limit` | `gpu` / `cpu`: which side is busy longer on most frames. `mixed`: neither clearly. `pacing`: neither is busy for 75% of the frame, so a cap, vsync or waits set the pace |
 | `checks.valid` | long enough, enough frames, required fields present |
 
@@ -183,9 +219,9 @@ To run the web page locally: `python -m http.server --directory docs`.
 
 ## Status
 
-- Version `0.1.1`. The format may still change based on feedback.
+- Version `0.2.0`. The format may still change based on feedback; changes so far are additive.
 - The CLI and the web page are covered by the tests above.
-- Both recorders are built, run and checked in CI on Linux, Windows and macOS, including MSVC and Rust 1.70. The C recorder keeps decimal points under a German locale.
+- Both recorders are built, run and checked in CI on Linux, Windows and macOS, including MSVC and Rust 1.70. On Windows, CI also runs the usage sampler and checks the hardware names. The C recorder keeps decimal points under a German locale.
 
 ## License
 

@@ -4,91 +4,381 @@
   "title": "frametime-report 0.1",
   "description": "A comparable frame-time report. Definitions: https://github.com/leixner/frametime-report/blob/main/SPEC.md",
   "type": "object",
-  "required": ["format", "capture", "result", "checks"],
+  "required": [
+    "format",
+    "capture",
+    "result",
+    "checks"
+  ],
   "properties": {
-    "format": { "const": "frametime-report/0.1" },
-    "app": { "type": "string" },
+    "format": {
+      "const": "frametime-report/0.1"
+    },
+    "app": {
+      "type": "string"
+    },
     "build": {
       "type": "object",
       "properties": {
-        "repo": { "type": "string" },
-        "commit": { "type": ["string", "number"] }
+        "repo": {
+          "type": "string"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
       }
     },
     "settings": {
       "type": "object",
       "properties": {
-        "profile": { "type": ["string", "number"] },
-        "output": { "type": "string" },
-        "internal": { "type": "string" },
-        "raytracing": { "type": "boolean" },
-        "upscaler": { "type": "string" },
-        "fpsCap": { "type": "number", "minimum": 0 }
+        "profile": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "output": {
+          "type": "string"
+        },
+        "internal": {
+          "type": "string"
+        },
+        "raytracing": {
+          "type": "boolean"
+        },
+        "upscaler": {
+          "type": "string"
+        },
+        "fpsCap": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     },
     "scene": {
       "type": "string",
       "description": "One of the scene ids in SPEC.md, or custom:<name>.",
       "anyOf": [
-        { "enum": ["menu", "interior", "city-walk", "city-drive", "open-drive", "boat", "flight", "chase"] },
-        { "pattern": "^custom:.+" }
+        {
+          "enum": [
+            "menu",
+            "interior",
+            "city-walk",
+            "city-drive",
+            "open-drive",
+            "boat",
+            "flight",
+            "chase"
+          ]
+        },
+        {
+          "pattern": "^custom:.+"
+        }
       ]
     },
     "pc": {
       "type": "object",
       "properties": {
-        "cpu": { "type": "string" },
-        "gpu": { "type": "string" },
-        "ramGB": { "type": "number", "minimum": 0 },
-        "driver": { "type": ["string", "number"] },
-        "os": { "type": "string" }
+        "cpu": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "ramGB": {
+          "type": "number",
+          "minimum": 0
+        },
+        "driver": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "os": {
+          "type": "string"
+        },
+        "cores": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vramGB": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     },
     "capture": {
       "type": "object",
-      "required": ["tool", "seconds"],
+      "required": [
+        "tool",
+        "seconds"
+      ],
       "properties": {
-        "tool": { "type": "string", "description": "ftlog, presentmon:<column> or capframex:<column>" },
-        "source": { "type": "string" },
-        "seconds": { "type": "number", "minimum": 0 },
-        "skippedSeconds": { "type": "number", "minimum": 0 },
-        "fromMark": { "type": ["string", "null"] },
-        "ftreport": { "type": "string", "description": "Version of the tool that wrote the report." }
+        "tool": {
+          "type": "string",
+          "description": "ftlog, presentmon:<column> or capframex:<column>"
+        },
+        "source": {
+          "type": "string"
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "skippedSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "fromMark": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ftreport": {
+          "type": "string",
+          "description": "Version of the tool that wrote the report."
+        }
       }
     },
     "result": {
       "type": "object",
-      "required": ["frames", "avgFps", "medianMs", "p95Ms", "p99Ms", "low1Fps", "stutters"],
+      "required": [
+        "frames",
+        "avgFps",
+        "medianMs",
+        "p95Ms",
+        "p99Ms",
+        "low1Fps",
+        "stutters"
+      ],
       "properties": {
-        "frames": { "type": "integer", "minimum": 1 },
-        "avgFps": { "type": "number", "exclusiveMinimum": 0 },
-        "medianMs": { "type": "number", "exclusiveMinimum": 0 },
-        "p95Ms": { "type": "number", "exclusiveMinimum": 0 },
-        "p99Ms": { "type": "number", "exclusiveMinimum": 0 },
-        "low1Fps": { "type": "number", "exclusiveMinimum": 0 },
-        "stutters": { "type": "integer", "minimum": 0 },
-        "maxMs": { "type": "number", "exclusiveMinimum": 0 },
+        "frames": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "avgFps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "medianMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "p95Ms": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "p99Ms": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "low1Fps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "stutters": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
         "busy": {
           "type": "object",
           "description": "Present when CPU and GPU busy times exist for at least half of the frames.",
-          "required": ["frames", "cpuMs", "gpuMs", "gpuBoundShare", "limit"],
+          "required": [
+            "frames",
+            "cpuMs",
+            "gpuMs",
+            "gpuBoundShare",
+            "limit"
+          ],
           "properties": {
-            "frames": { "type": "integer", "minimum": 1 },
-            "cpuMs": { "type": "number", "minimum": 0 },
-            "gpuMs": { "type": "number", "minimum": 0 },
-            "gpuBoundShare": { "type": "number", "minimum": 0, "maximum": 1 },
-            "limit": { "enum": ["gpu", "cpu", "mixed", "pacing"] }
+            "frames": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cpuMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "gpuMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "gpuBoundShare": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "limit": {
+              "enum": [
+                "gpu",
+                "cpu",
+                "mixed",
+                "pacing"
+              ]
+            }
           },
           "additionalProperties": false
+        },
+        "freezes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Frames longer than 200 ms (the BM-v1 threshold)."
+        },
+        "usage": {
+          "type": "object",
+          "description": "Median and peak of the recorder's usage samples inside the measured window.",
+          "required": [
+            "samples"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "samples": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cpuPct": {
+              "type": "object",
+              "required": [
+                "median",
+                "max"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "median": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "description": "This process, % of all logical cores."
+            },
+            "ramMB": {
+              "type": "object",
+              "required": [
+                "median",
+                "max"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "median": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "description": "This process, private memory in MB."
+            },
+            "gpuPct": {
+              "type": "object",
+              "required": [
+                "median",
+                "max"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "median": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "description": "Busiest GPU engine, summed over all processes, like Task Manager."
+            },
+            "vramMB": {
+              "type": "object",
+              "required": [
+                "median",
+                "max"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "median": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "description": "Dedicated GPU memory in use, MB."
+            },
+            "sysCpuPct": {
+              "type": "object",
+              "required": [
+                "median",
+                "max"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "median": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "description": "Whole system, %."
+            },
+            "sysRamPct": {
+              "type": "object",
+              "required": [
+                "median",
+                "max"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "median": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "description": "Whole system memory load, %."
+            }
+          }
         }
       }
     },
     "checks": {
       "type": "object",
-      "required": ["valid", "notes"],
+      "required": [
+        "valid",
+        "notes"
+      ],
       "properties": {
-        "valid": { "type": "boolean" },
-        "notes": { "type": "array", "items": { "type": "string" } }
+        "valid": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   }

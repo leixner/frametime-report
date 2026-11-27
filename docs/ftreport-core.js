@@ -13,7 +13,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.1.1";
+  var VERSION = "0.2.0";
   var FORMAT = "frametime-report/0.1";
   var LOG_MAGIC = "# frametime-log v1";
   var LIKE_FOR_LIKE_KEYS = ["settings.profile", "settings.output", "settings.internal", "settings.raytracing",
@@ -24,6 +24,9 @@
   var APP_COLUMNS = ["Application", "ProcessName"];
   var SWAPCHAIN_COLUMNS = ["SwapChainAddress", "SwapChain"];
   var STUTTER_FACTOR = 2.5;
+  var FREEZE_MS = 200.0;
+  var SAMPLE_KEYS = [["cpu", "cpuPct"], ["ram", "ramMB"], ["gpu", "gpuPct"], ["vram", "vramMB"],
+                     ["syscpu", "sysCpuPct"], ["sysram", "sysRamPct"]];
   var BUSY_MIN_SHARE = 0.5;
   var PACING_FACTOR = 0.75;
   var GPU_BOUND_AT = 0.6;
@@ -129,7 +132,7 @@
   function Capture(tool) {
     this.tool = tool;
     this.frames = []; this.ends = []; this.cpu = []; this.gpu = [];
-    this.meta = {}; this.marks = {}; this.notes = [];
+    this.meta = {}; this.marks = {}; this.notes = []; this.samples = [];
   }
   Capture.prototype.add = function (ms, end, cpu, gpu) {
     if (end === null || end === undefined) end = (this.ends.length ? this.ends[this.ends.length - 1] : 0.0) + ms;
@@ -175,6 +178,18 @@
           if (t === null) throw new FtError("line " + no + ": bad mark time");
           var label = strip(m[2]);
           if (!Object.prototype.hasOwnProperty.call(cap.marks, label)) cap.marks[label] = t;
+        } else if (body.indexOf("sample ") === 0) {
+          var bits = body.slice(7).split(/\s+/).filter(function (b) { return b; });
+          var ts = bits.length ? num(bits[0]) : null;
+          if (ts === null) throw new FtError("line " + no + ": bad sample time");
+          var values = {};
+          for (var b = 1; b < bits.length; b++) {
+            var e = bits[b].indexOf("=");
+            if (e < 0) continue;
+            var x = num(bits[b].slice(e + 1));
+            if (x !== null && x >= 0) values[bits[b].slice(0, e)] = x;
+          }
+          cap.samples.push([ts, values]);
         }
         continue;
       }
@@ -314,8 +329,11 @@
     var n = frames.length;
     if (!n) throw new FtError("no frames in the measured window");
     var sumMs = total(frames), s = sortedCopy(frames), med = median(s);
-    var k = Math.max(1, Math.ceil(0.01 * n)), worst = s.slice(n - k), stutters = 0;
-    for (var i = 0; i < n; i++) if (frames[i] > STUTTER_FACTOR * med) stutters++;
+    var k = Math.max(1, Math.ceil(0.01 * n)), worst = s.slice(n - k), stutters = 0, freezes = 0;
+    for (var i = 0; i < n; i++) {
+      if (frames[i] > STUTTER_FACTOR * med) stutters++;
+      if (frames[i] > FREEZE_MS) freezes++;
+    }
     return {
       result: {
         frames: n,
@@ -325,10 +343,24 @@
         p99Ms: r2(nearestRank(s, 99)),
         low1Fps: r2(1000.0 / (total(worst) / k)),
         stutters: stutters,
+        freezes: freezes,
         maxMs: r2(s[s.length - 1])
       },
       seconds: sumMs / 1000.0
     };
+  }
+
+  function summarizeUsage(samples, startMs, endMs) {
+    var inside = samples.filter(function (s) { return startMs - 1e-9 <= s[0] && s[0] <= endMs + 1e-9; })
+                        .map(function (s) { return s[1]; });
+    if (!inside.length) return null;
+    var usage = { samples: inside.length };
+    SAMPLE_KEYS.forEach(function (pair) {
+      var vals = sortedCopy(inside.filter(function (v) { return Object.prototype.hasOwnProperty.call(v, pair[0]); })
+                                  .map(function (v) { return v[pair[0]]; }));
+      if (vals.length) usage[pair[1]] = { median: r2(median(vals)), max: r2(vals[vals.length - 1]) };
+    });
+    return usage;
   }
 
   function analyzeBusy(frames, cpu, gpu) {
@@ -381,6 +413,8 @@
     var stats = compute(frames), result = stats.result, seconds = stats.seconds;
     var busy = analyzeBusy(frames, idx.map(function (i) { return cap.cpu[i]; }), idx.map(function (i) { return cap.gpu[i]; }));
     if (busy) result.busy = busy;
+    var usage = summarizeUsage(cap.samples, cap.ends[idx[0]] - cap.frames[idx[0]], cap.ends[idx[idx.length - 1]]);
+    if (usage) result.usage = usage;
 
     var report = { format: FORMAT };
     ["app", "build", "settings", "scene", "pc"].forEach(function (key) {

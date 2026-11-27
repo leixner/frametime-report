@@ -200,6 +200,44 @@ class FtlogTests(unittest.TestCase):
         self.assertEqual(b, {"frames": 360, "cpuMs": 30.0, "gpuMs": 36.0, "gpuBoundShare": 1.0, "limit": "gpu"})
 
 
+class FreezeAndUsageTests(unittest.TestCase):
+    def test_freezes_are_frames_over_200_ms(self):
+        r, _ = ftreport.compute([40.0] * 100 + [200.0, 200.01, 350.0])
+        self.assertEqual(r["freezes"], 2)          # 200.0 itself is not a freeze
+        self.assertEqual(r["stutters"], 3)         # all three are > 2.5 x the 40 ms median
+
+    def test_samples_parsed_and_limited_to_the_window(self):
+        lines = ["# frametime-log v1"]
+        t = 0.0
+        for i in range(3000):                      # 3000 x 40 ms = 120 s
+            t += 40.0
+            lines.append("%.3f,40.000" % t)
+            if i % 25 == 24:                       # a sample every second
+                lines.append("# sample %.3f cpu=%d ram=2048.5 gpu=97 vram=6000 syscpu=40 sysram=55 junk bad=-1 x=nan"
+                             % (t, 10 + (i // 25) % 3))
+        lines.append("# sample 999999 cpu=99")     # after the last frame: outside the window
+        cap = ftreport.read_ftlog("\n".join(lines))
+        self.assertEqual(len(cap.samples), 121)
+        self.assertNotIn("bad", cap.samples[0][1])
+        self.assertNotIn("x", cap.samples[0][1])
+        r = ftreport.build_report_from_text("\n".join(lines), "u.ftlog", {"skip": 30.0, "require": []})
+        u = r["result"]["usage"]
+        self.assertEqual(u["samples"], 91)          # seconds 30..120
+        self.assertEqual(u["cpuPct"], {"median": 11.0, "max": 12.0})
+        self.assertEqual(u["gpuPct"], {"median": 97.0, "max": 97.0})
+        self.assertEqual(u["ramMB"]["median"], 2048.5)
+        self.assertEqual(set(u), {"samples", "cpuPct", "ramMB", "gpuPct", "vramMB", "sysCpuPct", "sysRamPct"})
+
+    def test_no_samples_no_usage(self):
+        r = ftreport.build_report_from_text("# frametime-log v1\n" + "\n".join(["16.6"] * 500), "x", {"skip": 0.0})
+        self.assertNotIn("usage", r["result"])
+        self.assertEqual(r["result"]["freezes"], 0)
+
+    def test_bad_sample_time_is_an_error(self):
+        with self.assertRaises(ftreport.FtError):
+            ftreport.read_ftlog("# frametime-log v1\n# sample abc cpu=1\n")
+
+
 class BusyTests(unittest.TestCase):
     def check(self, cpu, gpu, frame, limit, share=None):
         n = len(cpu)

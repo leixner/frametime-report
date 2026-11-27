@@ -59,8 +59,17 @@ jobs:
           test -z "$(ls *.ftlog 2>/dev/null)"
       - name: Record and check
         run: |
-          FTLOG="$PWD/rust.ftlog" recorders/rust/demo/target/release/ftlog-demo
-          python -I tests/check_demo_log.py rust.ftlog
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            FTLOG="$PWD/rust.ftlog" FTLOG_SAMPLE=100 recorders/rust/demo/target/release/ftlog-demo
+            python -I tests/check_demo_log.py rust.ftlog --windows
+          else
+            FTLOG="$PWD/rust.ftlog" recorders/rust/demo/target/release/ftlog-demo
+            python -I tests/check_demo_log.py rust.ftlog
+          fi
+      - name: Overhead of frame() (informational)
+        run: |
+          recorders/rust/demo/target/release/ftlog-demo bench 5000000
+          FTLOG="$PWD/bench.ftlog" recorders/rust/demo/target/release/ftlog-demo bench 2000000
 
   c-unix:
     name: C recorder (${{ matrix.compiler }}, ${{ matrix.os }})
@@ -91,7 +100,7 @@ jobs:
           python -I tests/check_demo_log.py cxx.ftlog
 
   c-msvc:
-    name: C recorder (MSVC, windows-latest)
+    name: C recorder (MSVC and MinGW, windows-latest)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,11 +113,22 @@ jobs:
         run: |
           cl /nologo /W4 /WX recorders\c\demo\main.c recorders\c\demo\impl.c /Fe:cdemo.exe || exit /b 1
           cl /nologo /W4 /WX /TP /EHsc recorders\c\demo\main.c recorders\c\demo\impl.c /Fe:cxxdemo.exe || exit /b 1
-      - name: Record and check
+      - name: Record and check (MSVC)
         shell: bash
         run: |
           ./cdemo.exe | grep "enabled: 0"
-          FTLOG="$(cygpath -w "$PWD/c.ftlog")" ./cdemo.exe
-          FTLOG="$(cygpath -w "$PWD/cxx.ftlog")" ./cxxdemo.exe
-          python -I tests/check_demo_log.py c.ftlog
-          python -I tests/check_demo_log.py cxx.ftlog
+          FTLOG="$(cygpath -w "$PWD/c.ftlog")" FTLOG_SAMPLE=100 ./cdemo.exe
+          FTLOG="$(cygpath -w "$PWD/cxx.ftlog")" FTLOG_SAMPLE=100 ./cxxdemo.exe
+          python -I tests/check_demo_log.py c.ftlog --windows
+          python -I tests/check_demo_log.py cxx.ftlog --windows
+      - name: Build and check with MinGW GCC (Windows code path, GCC warnings)
+        shell: bash
+        run: |
+          W="-Wall -Wextra -Werror -pedantic"
+          gcc --version | head -1
+          gcc -std=c99 $W recorders/c/demo/main.c recorders/c/demo/impl.c -o gdemo.exe
+          g++ -x c++ -std=c++11 $W recorders/c/demo/main.c recorders/c/demo/impl.c -o gxxdemo.exe
+          FTLOG="$(cygpath -w "$PWD/g.ftlog")" FTLOG_SAMPLE=100 ./gdemo.exe
+          FTLOG="$(cygpath -w "$PWD/gxx.ftlog")" FTLOG_SAMPLE=100 ./gxxdemo.exe
+          python -I tests/check_demo_log.py g.ftlog --windows
+          python -I tests/check_demo_log.py gxx.ftlog --windows

@@ -118,6 +118,25 @@ class ParityTests(unittest.TestCase):
                 lines.append("%.3f,%s,%.3f,%.3f" % (t, repr(ms), ms * rng.uniform(0.75, 0.95),
                                                     ms * rng.uniform(0.75 + off * 4, 0.95 + off * 4)))
             add(write(d, "bal%d.ftlog" % k, "\n".join(lines) + "\n"), skip=0.0)
+        # usage samples: irregular times, some keys missing, junk values, samples outside the window,
+        # and frame times around the 200 ms freeze threshold
+        lines, t = ["# frametime-log v1", "# sample 0 cpu=1"], 0.0
+        for i in range(5000):
+            ms = round(rng.uniform(150, 260) if rng.random() < 0.05 else rng.uniform(20, 60), 3)
+            t += ms
+            lines.append("%.3f,%s" % (t, repr(ms)))
+            if rng.random() < 0.05:
+                fields = ["cpu=%.1f" % rng.uniform(0, 100), "ram=%.1f" % rng.uniform(500, 9000)]
+                if rng.random() < 0.7:
+                    fields += ["gpu=%.1f" % rng.uniform(0, 100), "vram=%.1f" % rng.uniform(100, 8000)]
+                fields += rng.choice([["syscpu=%.2f" % rng.uniform(0, 100)], ["sysram=-3"], ["oops"], []])
+                lines.append("# sample %.3f %s" % (t - rng.uniform(0, 30), " ".join(fields)))
+        lines.append("# sample %.3f cpu=100" % (t + 5000))
+        usage_log = write(d, "usage.ftlog", "\n".join(lines) + "\n")
+        add(usage_log)
+        add(usage_log, skip=0.0, maxSeconds=100.0)
+        add(usage_log, skip=60.0, maxSeconds=33.3, minSeconds=0.0)
+
         # busy times on 55% of frames: just above the 50% the analysis needs
         lines, t = ["# frametime-log v1"], 0.0
         for i in range(4000):

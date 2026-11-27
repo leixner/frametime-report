@@ -26,7 +26,7 @@ import os
 import re
 import sys
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 FORMAT = "frametime-report/0.1"
 LOG_MAGIC = "# frametime-log v1"
 # Every setting that changes the frame rate. A key set in one report and missing
@@ -46,6 +46,16 @@ GPU_BUSY_COLUMNS = ("GPUBusy", "MsGPUActive", "msGPUActive")
 APP_COLUMNS = ("Application", "ProcessName")
 SWAPCHAIN_COLUMNS = ("SwapChainAddress", "SwapChain")
 STUTTER_FACTOR = 2.5
+FREEZE_MS = 200.0         # same threshold as KLBF's BM-v1 "freezes"
+# "# sample" keys -> report keys under result.usage
+SAMPLE_KEYS = (
+    ("cpu", "cpuPct"),
+    ("ram", "ramMB"),
+    ("gpu", "gpuPct"),
+    ("vram", "vramMB"),
+    ("syscpu", "sysCpuPct"),
+    ("sysram", "sysRamPct"),
+)
 REPRODUCE_TOLERANCE = 0.10
 BUSY_MIN_SHARE = 0.5      # busy analysis needs busy times on half of the window's frames
 PACING_FACTOR = 0.75      # neither CPU nor GPU busy for 75% of the frame: paced or capped
@@ -162,6 +172,7 @@ class Capture:
         self.tool = tool
         self.frames, self.ends, self.cpu, self.gpu = [], [], [], []
         self.meta, self.marks, self.notes = {}, {}, []
+        self.samples = []   # (t_ms, {key: value}) from "# sample" lines
 
     def add(self, ms, end=None, cpu=None, gpu=None):
         if end is None:
@@ -219,6 +230,19 @@ def read_ftlog(text):
                 label = bits[1].strip()
                 if label not in cap.marks:
                     cap.marks[label] = t
+            elif body.startswith("sample "):
+                bits = body[7:].split()
+                t = num(bits[0]) if bits else None
+                if t is None:
+                    raise FtError("line %d: bad sample time" % no)
+                values = {}
+                for kv in bits[1:]:
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        x = num(v)
+                        if x is not None and x >= 0:
+                            values[k] = x
+                cap.samples.append((t, values))
             continue
         if line.lower().startswith("t_ms"):
             continue
@@ -354,10 +378,12 @@ def compute(frames):
     med = median(s)
     k = max(1, math.ceil(0.01 * n))
     worst = s[n - k:]
-    stutters = 0
+    stutters = freezes = 0
     for x in frames:
         if x > STUTTER_FACTOR * med:
             stutters += 1
+        if x > FREEZE_MS:
+            freezes += 1
     return {
         "frames": n,
         "avgFps": r2(n / (sum_ms / 1000.0)),
@@ -366,8 +392,22 @@ def compute(frames):
         "p99Ms": r2(nearest_rank(s, 99)),
         "low1Fps": r2(1000.0 / (total(worst) / k)),
         "stutters": stutters,
+        "freezes": freezes,
         "maxMs": r2(s[-1]),
     }, sum_ms / 1000.0
+
+
+def summarize_usage(samples, start_ms, end_ms):
+    """Median and peak of each sampled value within the window. None without samples."""
+    inside = [v for t, v in samples if start_ms - 1e-9 <= t <= end_ms + 1e-9]
+    if not inside:
+        return None
+    usage = {"samples": len(inside)}
+    for key, name in SAMPLE_KEYS:
+        vals = sorted(v[key] for v in inside if key in v)
+        if vals:
+            usage[name] = {"median": r2(median(vals)), "max": r2(vals[-1])}
+    return usage
 
 
 def analyze_busy(frames, cpu, gpu):
@@ -439,6 +479,9 @@ def build_report_from_text(text, source, opts):
     busy = analyze_busy(frames, [cap.cpu[i] for i in idx], [cap.gpu[i] for i in idx])
     if busy:
         result["busy"] = busy
+    usage = summarize_usage(cap.samples, cap.ends[idx[0]] - cap.frames[idx[0]], cap.ends[idx[-1]])
+    if usage:
+        result["usage"] = usage
 
     report = {"format": FORMAT}
     for k in ("app", "build", "settings", "scene", "pc"):
@@ -503,6 +546,25 @@ def busy_line(b):
         b["cpuMs"], b["gpuMs"], fmt0(b["gpuBoundShare"] * 100), what)
 
 
+def usage_line(u):
+    def part(label, key, unit):
+        v = u.get(key)
+        return "%s %s%s (peak %s)" % (label, fmt0(v["median"]), unit, fmt0(v["max"])) if v else None
+    bits = [part("cpu", "cpuPct", "%"), part("ram", "ramMB", " MB"), part("gpu", "gpuPct", "%"),
+            part("vram", "vramMB", " MB"), part("system cpu", "sysCpuPct", "%"), part("system ram", "sysRamPct", "%")]
+    return "usage (median, %d samples): %s" % (u["samples"], " | ".join(b for b in bits if b))
+
+
+def pc_line(pc):
+    gpu = str(pc.get("gpu", "?")) + (" %s GB" % pc["vramGB"] if "vramGB" in pc else "")
+    bits = [str(pc.get("cpu", "?")), gpu]
+    if "ramGB" in pc:
+        bits.append("%s GB RAM" % pc["ramGB"])
+    if "os" in pc:
+        bits.append(str(pc["os"]))
+    return "pc: " + " | ".join(bits)
+
+
 def cmd_summarize(args):
     report = build_report(args)
     res = report["result"]
@@ -510,10 +572,16 @@ def cmd_summarize(args):
     print("  %d frames over %.1f s (skipped %s s%s)" % (
         res["frames"], report["capture"]["seconds"], fmt0(args.skip),
         ", from mark %s" % args.from_mark if args.from_mark else ""))
-    print("  avg %.2f fps | median %.2f ms | p95 %.2f ms | p99 %.2f ms | 1%% low %.2f fps | stutters %d | max %.2f ms" % (
-        res["avgFps"], res["medianMs"], res["p95Ms"], res["p99Ms"], res["low1Fps"], res["stutters"], res["maxMs"]))
+    print("  avg %.2f fps | median %.2f ms | p95 %.2f ms | p99 %.2f ms | 1%% low %.2f fps | max %.2f ms" % (
+        res["avgFps"], res["medianMs"], res["p95Ms"], res["p99Ms"], res["low1Fps"], res["maxMs"]))
+    print("  stutters %d (> %s x median) | freezes %d (> %s ms)" % (
+        res["stutters"], STUTTER_FACTOR, res["freezes"], fmt0(FREEZE_MS)))
     if "busy" in res:
         print("  " + busy_line(res["busy"]))
+    if "usage" in res:
+        print("  " + usage_line(res["usage"]))
+    if report.get("pc"):
+        print("  " + pc_line(report["pc"]))
     print("  valid: %s" % ("yes" if report["checks"]["valid"] else "NO"))
     for n in report["checks"]["notes"]:
         print("  note: %s" % n)
@@ -574,7 +642,8 @@ def cmd_validate(args):
 
 def cmd_compare(args):
     reps = [(os.path.basename(p), load_report(p)) for p in args.reports]
-    head = ("report", "commit", "settings", "scene", "avg fps", "p95 ms", "1% low", "stutters", "limit", "secs", "valid")
+    head = ("report", "commit", "settings", "scene", "avg fps", "p95 ms", "1% low", "stutters", "freezes",
+            "limit", "gpu %", "secs", "valid")
     rows = []
     for name, r in reps:
         res = r.get("result", {})
@@ -587,7 +656,9 @@ def cmd_compare(args):
             "%.2f" % res.get("p95Ms", float("nan")),
             "%.2f" % res.get("low1Fps", float("nan")),
             str(res.get("stutters", "?")),
+            str(res.get("freezes", "-")),
             str(get_dotted(res, "busy.limit") or "-"),
+            fmt0(get_dotted(res, "usage.gpuPct.median")) if get_dotted(res, "usage.gpuPct.median") is not None else "-",
             fmt0(get_dotted(r, "capture.seconds") or 0),
             "yes" if get_dotted(r, "checks.valid") else "no",
         ))

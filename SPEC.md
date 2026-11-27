@@ -32,6 +32,7 @@ t_ms,frame_ms
 | `# frametime-log v1` | Must be the first line. |
 | `# meta <key>=<value>` | Metadata. The key is a dotted path into the report, such as `settings.profile`. It may appear anywhere, and later values win. |
 | `# mark <t_ms> <label>` | A named point in time, such as `loaded` or `scene-start`. Labels contain no spaces. |
+| `# sample <t_ms> key=value ...` | Resource usage at a point in time, written by the recorders' optional sampler. Keys: `cpu` (this process, % of all logical cores), `ram` (this process, private MB), `gpu` (% of the busiest GPU engine, summed over all processes, like Task Manager), `vram` (dedicated GPU memory in use, MB), `syscpu` (whole system, %), `sysram` (system memory load, %). Missing keys mean "not measured"; negative or non-numeric values are ignored. |
 | `t_ms,frame_ms` | Column header for the frame lines. Optional. It may also be `t_ms,frame_ms,cpu_ms,gpu_ms`. |
 | `<t_ms>,<frame_ms>` | One frame. `t_ms` is the time since logging started at the end of the frame, in milliseconds. `frame_ms` is the time since the previous frame ended. |
 | `<t_ms>,<frame_ms>,<cpu_ms>,<gpu_ms>` | One frame, plus how long the CPU and the GPU were busy on it. An empty value or `NA` means unknown. Lines with and without busy times can be mixed. |
@@ -54,7 +55,10 @@ Numbers are plain decimals (`16.667`, `-2`, `.5`, `1e3`). Values like `inf`, `na
 | `settings.upscaler` | `none`, `fsr2`, `fsr4`, … |
 | `settings.fpsCap` | `30`, `60`, `0` (none) |
 | `scene` | see the scene list below |
-| `pc.cpu` / `pc.gpu` / `pc.ramGB` / `pc.driver` / `pc.os` | free text / number |
+| `pc.cpu` / `pc.gpu` / `pc.driver` / `pc.os` | model and version names |
+| `pc.ramGB` / `pc.vramGB` / `pc.cores` | numbers (logical cores) |
+
+On Windows the recorders fill in all `pc.*` keys themselves, once, from a background thread. They write model names only: no host names, user names, serial numbers or paths.
 
 The application usually knows `build.*` and `settings.*`. The person testing adds `scene` and `pc.*` with `ftreport summarize --set`.
 
@@ -72,7 +76,7 @@ The application usually knows `build.*` and `settings.*`. The person testing add
   "capture":  { "tool": "ftlog", "source": "run.ftlog", "seconds": 300.0,
                 "skippedSeconds": 30.0, "fromMark": null, "ftreport": "0.1.0" },
   "result":   { "frames": 6912, "avgFps": 23.04, "medianMs": 43.1, "p95Ms": 47.0,
-                "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "maxMs": 180.2,
+                "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "freezes": 1, "maxMs": 230.2,
                 "busy": { "frames": 6912, "cpuMs": 41.2, "gpuMs": 32.5,
                           "gpuBoundShare": 0.04, "limit": "cpu" } },
   "checks":   { "valid": true, "notes": [] }
@@ -93,10 +97,26 @@ The **measured window** is every frame after the skip point. The skip point is `
 | `medianMs` | Median frame time |
 | `p95Ms`, `p99Ms` | Nearest-rank percentiles of frame time: sort ascending, take element `ceil(p/100 × n)`, counting from 1 |
 | `low1Fps` | `1000 ÷ mean(the slowest ceil(1% × n) frame times)` |
-| `stutters` | Number of frames longer than `2.5 × medianMs` |
+| `stutters` | Number of frames longer than `2.5 × medianMs`: hitches relative to the run's own pace |
+| `freezes` | Number of frames longer than 200 ms: hangs a player notices at any frame rate (the same threshold as KLBF's BM-v1) |
 | `maxMs` | Longest frame |
 
 Sums run left to right in frame order. All values are rounded to 2 decimals, **half away from zero** (`0.125` → `0.13`). These rules make every implementation give the same digits.
+
+### Usage (`result.usage`)
+
+Present when the log has `# sample` lines inside the measured window (from the first window frame's start to the last window frame's end). For each sampled key, the median and the highest value of those samples:
+
+| Field | From `# sample` key |
+|---|---|
+| `cpuPct` | `cpu` |
+| `ramMB` | `ram` |
+| `gpuPct` | `gpu` |
+| `vramMB` | `vram` |
+| `sysCpuPct` | `syscpu` |
+| `sysRamPct` | `sysram` |
+
+Each is `{ "median": …, "max": … }`; `samples` is the number of samples in the window.
 
 ### CPU or GPU bound (`result.busy`)
 

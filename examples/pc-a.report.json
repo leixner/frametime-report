@@ -11,32 +11,65 @@
   },
   "scene": "city-walk",
   "pc": {
+    "cores": 16,
+    "cpu": "Example CPU A 8-Core",
     "gpu": "Example GPU A",
-    "ramGB": 64
+    "vramGB": 16,
+    "ramGB": 64,
+    "driver": "1.2.3",
+    "os": "Windows 11 (build 26100, 24H2)"
   },
   "capture": {
     "tool": "ftlog",
     "source": "pc-a.ftlog",
-    "seconds": 304.69,
+    "seconds": 306.43,
     "skippedSeconds": 30.0,
     "fromMark": "loaded",
-    "ftreport": "0.1.0"
+    "ftreport": "0.2.0"
   },
   "result": {
-    "frames": 7057,
-    "avgFps": 23.16,
-    "medianMs": 42.93,
-    "p95Ms": 48.01,
-    "p99Ms": 50.46,
-    "low1Fps": 14.6,
-    "stutters": 16,
-    "maxMs": 139.15,
+    "frames": 7061,
+    "avgFps": 23.04,
+    "medianMs": 43.0,
+    "p95Ms": 47.93,
+    "p99Ms": 50.25,
+    "low1Fps": 10.93,
+    "stutters": 22,
+    "freezes": 6,
+    "maxMs": 411.8,
     "busy": {
-      "frames": 7057,
-      "cpuMs": 28.81,
-      "gpuMs": 37.98,
+      "frames": 7061,
+      "cpuMs": 28.93,
+      "gpuMs": 38.08,
       "gpuBoundShare": 1.0,
       "limit": "gpu"
+    },
+    "usage": {
+      "samples": 613,
+      "cpuPct": {
+        "median": 14.0,
+        "max": 19.2
+      },
+      "ramMB": {
+        "median": 9799.0,
+        "max": 9912.1
+      },
+      "gpuPct": {
+        "median": 95.9,
+        "max": 100.0
+      },
+      "vramMB": {
+        "median": 11199.9,
+        "max": 11314.0
+      },
+      "sysCpuPct": {
+        "median": 30.7,
+        "max": 39.9
+      },
+      "sysRamPct": {
+        "median": 52.0,
+        "max": 53.6
+      }
     }
   },
   "checks": {

@@ -1,10 +1,17 @@
-"""Check a log written by a recorder demo. Usage: python -I tests/check_demo_log.py <log>"""
+"""Check a log written by a recorder demo.
+
+Usage: python -I tests/check_demo_log.py <log> [--windows]
+
+--windows: also require the hardware names and usage samples the recorders
+write on Windows (run the demo with FTLOG_SAMPLE=100).
+"""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ftreport  # noqa: E402
 
+windows = "--windows" in sys.argv[2:]
 with open(sys.argv[1], encoding="utf-8") as f:
     text = f.read()
 problems = []
@@ -26,6 +33,21 @@ for line in text.splitlines():
     if line and not line.startswith("#") and not line.startswith("t_ms") and line.count(",") not in (1, 3):
         problems.append("bad frame line %r (locale?)" % line)
         break
+    if line.startswith("# sample ") and "," in line:
+        problems.append("decimal comma in sample line %r (locale?)" % line)
+        break
+
+pc = cap.meta.get("pc") or {}
+if windows:
+    for key in ("cpu", "gpu", "ramGB", "os", "cores"):
+        if key not in pc:
+            problems.append("hardware name pc.%s missing" % key)
+    if not str(pc.get("os", "")).startswith("Windows"):
+        problems.append("pc.os is %r" % pc.get("os"))
+    if len(cap.samples) < 3:
+        problems.append("expected usage samples (FTLOG_SAMPLE=100), got %d" % len(cap.samples))
+    elif not all("cpu" in v and "ram" in v and "sysram" in v for _, v in cap.samples):
+        problems.append("samples without cpu/ram/sysram: %r" % cap.samples[:2])
 
 summary = ""
 if "loaded-scene" in cap.marks and cap.frames:
@@ -45,6 +67,8 @@ if "loaded-scene" in cap.marks and cap.frames:
     summary = ", avg %.1f fps, stutters %d, busy %s" % (
         result["avgFps"], result["stutters"], busy and busy["limit"])
 print("%s: %d frames, marks %s%s" % (os.path.basename(sys.argv[1]), len(cap.frames), sorted(cap.marks), summary))
+if pc or cap.samples:
+    print("  pc: %s | %d samples, last %r" % (pc, len(cap.samples), cap.samples[-1][1] if cap.samples else None))
 for p in problems:
     print("FAIL: " + p)
 sys.exit(1 if problems else 0)
