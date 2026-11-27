@@ -26,7 +26,7 @@ import os
 import re
 import sys
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 FORMAT = "frametime-report/0.1"
 LOG_MAGIC = "# frametime-log v1"
 # Everything that changes the numbers. Different values: not like for like.
@@ -816,8 +816,10 @@ def validate_report(r):
     cap = r.get("capture")
     if not isinstance(cap, dict) or not isinstance(cap.get("seconds"), (int, float)):
         errs.append("capture.seconds missing")
-    _, capture_errors = capture_metadata(r)
+    fields, capture_errors = capture_metadata(r)
     errs.extend(capture_errors)
+    if fields.get("phase") == "cold-boot" and isinstance(cap, dict) and (cap.get("skippedSeconds") or cap.get("fromMark")):
+        errs.append("a cold-boot run is measured from launch: capture.skippedSeconds must be 0 and capture.fromMark null")
     for k in ("settings.profile", "scene"):
         if get_dotted(r, k) is None:
             errs.append("%s missing (recommended)" % k)

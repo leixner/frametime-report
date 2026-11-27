@@ -549,11 +549,29 @@ class CompareValidateTests(unittest.TestCase):
                     "capture.phase", "capture.clockStart"):
             self.assertIn(key, ftreport.LIKE_FOR_LIKE_KEYS)
 
+    def test_validate_rejects_cold_boot_that_skips(self):
+        good = self.report("cold", 40.0, extra=[("capture.phase", "cold-boot"), ("capture.firstPresentMs", "2400")])
+        r = json.load(open(good, encoding="utf-8"))
+        self.assertEqual(r["capture"]["skippedSeconds"], 30.0)      # the default skip: summarize flags it too
+        self.assertFalse(r["checks"]["valid"])
+        for change in ({"skippedSeconds": 30.0}, {"skippedSeconds": 0.0, "fromMark": "menu"}):
+            with self.subTest(change=change):
+                bad = dict(r, capture=dict(r["capture"], **change))
+                path = write(self.d, "skip.json", json.dumps(bad))
+                code, text = run(["validate", path])
+                self.assertEqual(code, 1)
+                self.assertIn("a cold-boot run is measured from launch", text)
+        ok = dict(r, capture=dict(r["capture"], skippedSeconds=0.0, fromMark=None))
+        code, text = run(["validate", write(self.d, "ok.json", json.dumps(ok))])
+        self.assertEqual(code, 0, text)
+
     def test_validate_rejects_bad_launch_metadata(self):
         good = self.report("cold", 40.0, extra=[
             ("capture.phase", "cold-boot"), ("capture.firstPresentMs", "2400"),
             ("settings.shaderCache", "cold"),
         ])
+        r = json.load(open(good, encoding="utf-8"))     # a cold boot is measured without a skip
+        good = write(self.d, "cold-ok.json", json.dumps(dict(r, capture=dict(r["capture"], skippedSeconds=0.0))))
         self.assertEqual(run(["validate", good])[0], 0)
         mutations = (
             ("phase", "cold_boot", "capture.phase must be"),

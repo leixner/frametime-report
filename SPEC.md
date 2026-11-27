@@ -79,7 +79,7 @@ The application usually knows `build.*` and `settings.*`. The person testing add
   "pc":       { "cpu": "…", "gpu": "…", "ramGB": 64, "driver": "…", "os": "…" },
   "capture":  { "tool": "ftlog", "source": "run.ftlog", "seconds": 300.0,
                 "skippedSeconds": 30.0, "fromMark": null, "untilMark": null,
-                "phase": "scene", "ftreport": "0.4.0" },
+                "phase": "scene", "ftreport": "0.4.1" },
   "result":   { "frames": 6912, "avgFps": 23.04, "medianMs": 43.1, "p95Ms": 47.0,
                 "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "freezes": 1, "maxMs": 230.2,
                 "timeAt30Pct": 3.1, "timeAt60Pct": 0.0,

@@ -93,7 +93,7 @@ Validate incoming reports against the published schema, with no need for this to
 https://leixner.github.io/frametime-report/schema/report-0.1.schema.json
 ```
 
-`ftreport validate report.json` does the same checks from the command line.
+`ftreport validate report.json` does the same checks from the command line, plus the ones the schema can't express: a launch clock needs `capture.firstPresentMs`, and a cold-boot report must not skip time or start at a mark.
 
 ## For projects: built-in recording in three lines
 
@@ -240,7 +240,7 @@ To run the web page locally: `python -m http.server --directory docs`.
 
 ## Status
 
-- Version `0.4.0`. The format may still change based on feedback; changes so far are additive.
+- Version `0.4.1`. The format may still change based on feedback; changes so far are additive.
 - The CLI and the web page are covered by the tests above.
 - Both recorders are built, run and checked in CI on Linux, Windows and macOS, including MSVC and Rust 1.70. On Windows, CI also runs the usage sampler and checks the hardware names. The C recorder keeps decimal points under a German locale.
 

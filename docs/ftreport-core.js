@@ -13,7 +13,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.4.0";
+  var VERSION = "0.4.1";
   var FORMAT = "frametime-report/0.1";
   var LOG_MAGIC = "# frametime-log v1";
   var LIKE_FOR_LIKE_KEYS = ["settings.profile", "settings.output", "settings.internal", "settings.raytracing",
