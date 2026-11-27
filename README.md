@@ -59,7 +59,7 @@ To compare runs, the first report is the baseline:
 python ftreport.py compare before.report.json after.report.json other-pc.report.json
 ```
 
-`compare` says whether two runs are **like for like**: same profile, output, ray tracing, upscaler and scene. On the same commit it also says whether they **reproduce** each other: average fps within 10%.
+`compare` says whether two runs are **like for like**: same profile, output and internal resolution, ray tracing, upscaler, fps cap and scene. A setting given in one report but not the other counts as a difference. On the same commit it also says whether they **reproduce** each other: average fps within 10%.
 
 ## For trackers and dashboards
 
@@ -183,7 +183,7 @@ To run the web page locally: `python -m http.server --directory docs`.
 
 ## Status
 
-- Version `0.1.0`. The format may still change based on feedback.
+- Version `0.1.1`. The format may still change based on feedback.
 - The CLI and the web page are covered by the tests above.
 - Both recorders are built, run and checked in CI on Linux, Windows and macOS, including MSVC and Rust 1.70. The C recorder keeps decimal points under a German locale.
 

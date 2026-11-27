@@ -26,14 +26,18 @@ import os
 import re
 import sys
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 FORMAT = "frametime-report/0.1"
 LOG_MAGIC = "# frametime-log v1"
+# Every setting that changes the frame rate. A key set in one report and missing
+# in the other counts as a difference: unknown is not the same as equal.
 LIKE_FOR_LIKE_KEYS = (
     "settings.profile",
     "settings.output",
+    "settings.internal",
     "settings.raytracing",
     "settings.upscaler",
+    "settings.fpsCap",
     "scene",
 )
 FRAME_COLUMNS = ("MsBetweenPresents", "FrameTime", "msBetweenPresents")

@@ -325,9 +325,9 @@ class CompareValidateTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def report(self, name, ms, scene="city-walk", profile="series-x", commit="abc1234"):
+    def report(self, name, ms, scene="city-walk", profile="series-x", commit="abc1234", extra=()):
         p = write(self.d, name + ".ftlog", ftlog_text([ms] * 8000, meta=[("settings.profile", profile),
-                                                                       ("build.commit", commit)]))
+                                                                       ("build.commit", commit)] + list(extra)))
         out = os.path.join(self.d, name + ".json")
         run(["summarize", p, "--set", "scene=" + scene, "--json", out])
         return out
@@ -344,6 +344,22 @@ class CompareValidateTests(unittest.TestCase):
         self.assertIn("c.json vs a.json: like for like", text)
         self.assertIn("does NOT reproduce", text)
         self.assertIn("e.json vs a.json: NOT like for like (differs in settings.profile)", text)
+
+    def test_internal_resolution_and_cap_are_not_like_for_like(self):
+        # reported on PortWatch issue #233: 1280x720 uncapped vs 1600x900 capped at 30
+        a = self.report("a", 40.0, extra=[("settings.output", "1920x1080"), ("settings.internal", "1280x720")])
+        b = self.report("b", 44.0, extra=[("settings.output", "1920x1080"), ("settings.internal", "1600x900"),
+                                          ("settings.fpsCap", "30")])
+        c = self.report("c", 40.5, extra=[("settings.output", "1920x1080"), ("settings.internal", "1280x720")])
+        code, text = run(["compare", a, b, c])
+        self.assertEqual(code, 0)
+        self.assertIn("b.json vs a.json: NOT like for like (differs in settings.internal, settings.fpsCap)", text)
+        self.assertIn("c.json vs a.json: like for like", text)
+
+    def test_like_for_like_keys_cover_every_rate_setting(self):
+        for key in ("settings.profile", "settings.output", "settings.internal", "settings.raytracing",
+                    "settings.upscaler", "settings.fpsCap", "scene"):
+            self.assertIn(key, ftreport.LIKE_FOR_LIKE_KEYS)
 
     def test_validate(self):
         good = self.report("g", 40.0)

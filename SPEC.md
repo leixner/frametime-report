@@ -123,7 +123,7 @@ An invalid report is still written. It just shouldn't be counted as a result.
 
 ### Comparing reports
 
-Two reports are **like for like** when `settings.profile`, `settings.output`, `settings.raytracing`, `settings.upscaler` and `scene` are equal.
+Two reports are **like for like** when `settings.profile`, `settings.output`, `settings.internal`, `settings.raytracing`, `settings.upscaler`, `settings.fpsCap` and `scene` are equal. A key that is set in one report and missing in the other counts as different: unknown is not the same as equal.
 
 Two like-for-like reports on the same `build.commit` from different PCs or people **reproduce** each other when their `avgFps` are within 10% of each other.
 

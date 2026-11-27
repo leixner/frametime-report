@@ -167,6 +167,12 @@ class ParityTests(unittest.TestCase):
                 # compare through JSON so 30.0 and 30 are the same number
                 self.assertEqual(json.loads(json.dumps(py["report"])), js["report"])
 
+    def test_like_for_like_keys_match(self):
+        core = os.path.join(os.path.dirname(HERE), "docs", "ftreport-core.js").replace("\\", "/")
+        out = subprocess.run([NODE, "-e", "process.stdout.write(JSON.stringify(require(%s).LIKE_FOR_LIKE_KEYS))"
+                              % json.dumps(core)], stdout=subprocess.PIPE, check=True)
+        self.assertEqual(json.loads(out.stdout.decode("utf-8")), list(ftreport.LIKE_FOR_LIKE_KEYS))
+
     def test_cases_cover_busy_and_errors(self):
         busy = sum(1 for j in self.js if "report" in j and "busy" in j["report"]["result"])
         errors = sum(1 for j in self.js if "error" in j)

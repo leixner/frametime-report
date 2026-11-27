@@ -13,10 +13,11 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.1.0";
+  var VERSION = "0.1.1";
   var FORMAT = "frametime-report/0.1";
   var LOG_MAGIC = "# frametime-log v1";
-  var LIKE_FOR_LIKE_KEYS = ["settings.profile", "settings.output", "settings.raytracing", "settings.upscaler", "scene"];
+  var LIKE_FOR_LIKE_KEYS = ["settings.profile", "settings.output", "settings.internal", "settings.raytracing",
+                            "settings.upscaler", "settings.fpsCap", "scene"];
   var FRAME_COLUMNS = ["MsBetweenPresents", "FrameTime", "msBetweenPresents"];
   var CPU_BUSY_COLUMNS = ["CPUBusy"];
   var GPU_BUSY_COLUMNS = ["GPUBusy", "MsGPUActive", "msGPUActive"];
@@ -416,7 +417,7 @@
   }
 
   return {
-    VERSION: VERSION, FORMAT: FORMAT, FtError: FtError,
+    VERSION: VERSION, FORMAT: FORMAT, FtError: FtError, LIKE_FOR_LIKE_KEYS: LIKE_FOR_LIKE_KEYS,
     r2: r2, num: num, parseValue: parseValue, parseCsv: parseCsv, getDotted: getDotted,
     readFtlog: readFtlog, readPresentmon: readPresentmon, compute: compute, analyzeBusy: analyzeBusy,
     analyze: analyze, buildReport: buildReport, likeForLike: likeForLike
