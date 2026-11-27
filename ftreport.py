@@ -26,11 +26,11 @@ import os
 import re
 import sys
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 FORMAT = "frametime-report/0.1"
 LOG_MAGIC = "# frametime-log v1"
-# Every setting that changes the frame rate. A key set in one report and missing
-# in the other counts as a difference: unknown is not the same as equal.
+# Everything that changes the numbers. Different values: not like for like.
+# A key set in one report and missing in the other: unknown, never "like for like".
 LIKE_FOR_LIKE_KEYS = (
     "settings.profile",
     "settings.output",
@@ -38,8 +38,14 @@ LIKE_FOR_LIKE_KEYS = (
     "settings.raytracing",
     "settings.upscaler",
     "settings.fpsCap",
+    "settings.shaderCache",
     "scene",
+    "capture.phase",
+    "capture.clockStart",
 )
+PHASES = ("cold-boot", "scene")
+CLOCK_STARTS = ("launch", "first-present")
+SHADER_CACHES = ("cold", "warm")
 FRAME_COLUMNS = ("MsBetweenPresents", "FrameTime", "msBetweenPresents")
 CPU_BUSY_COLUMNS = ("CPUBusy",)
 GPU_BUSY_COLUMNS = ("GPUBusy", "MsGPUActive", "msGPUActive")
@@ -375,6 +381,74 @@ def window(cap, skip_s, from_mark, max_s, until_mark=None):
     return idx
 
 
+def start_at_launch(cap, first_ms):
+    """Put the time from launch to the first present in front of the frames, as one frame.
+
+    Every time (frames, marks, samples) moves so that 0 is the launch. A long black
+    screen at start-up then counts toward avg fps, freezes and the worst frames.
+    """
+    if not cap.frames or first_ms <= 0:
+        return
+    off = first_ms - (cap.ends[0] - cap.frames[0])
+    cap.ends = [e + off for e in cap.ends]
+    for label in cap.marks:
+        cap.marks[label] += off
+    cap.samples = [(t + off, v) for t, v in cap.samples]
+    cap.frames.insert(0, first_ms)
+    cap.ends.insert(0, first_ms)
+    cap.cpu.insert(0, None)
+    cap.gpu.insert(0, None)
+
+
+def capture_phase(cap, o):
+    """Read and check capture.phase, capture.clockStart, capture.firstPresentMs and
+    settings.shaderCache. Returns ({report capture keys}, [problems])."""
+    out, problems = {}, []
+    phase = get_dotted(cap.meta, "capture.phase")
+    clock = get_dotted(cap.meta, "capture.clockStart")
+    first = get_dotted(cap.meta, "capture.firstPresentMs")
+    cache = get_dotted(cap.meta, "settings.shaderCache")
+    if phase is not None and phase not in PHASES:
+        problems.append("capture.phase must be cold-boot or scene")
+        phase = None
+    if clock is not None and clock not in CLOCK_STARTS:
+        problems.append("capture.clockStart must be launch or first-present")
+        clock = None
+    if cache is not None and cache not in SHADER_CACHES:
+        problems.append("settings.shaderCache must be cold or warm")
+    if first is not None and (isinstance(first, bool) or not isinstance(first, (int, float)) or first < 0):
+        problems.append("capture.firstPresentMs must be a number of milliseconds")
+        first = None
+    if clock is None and phase == "cold-boot":
+        clock = "launch"
+    if clock == "launch":
+        if first is None:
+            problems.append("the clock starts at launch, but capture.firstPresentMs (launch to first present) is missing")
+            clock = None
+        else:
+            start_at_launch(cap, first)
+    if phase == "cold-boot" and (o["skip"] or o["fromMark"]):
+        problems.append("a cold-boot run is measured from launch: use --skip 0 and no --from-mark")
+    for k, v in (("phase", phase), ("clockStart", clock), ("firstPresentMs", first)):
+        if v is not None:
+            out[k] = v
+    return out, problems
+
+
+def like_for_like(a, b):
+    """Keys whose values differ, and keys only one of the two reports sets."""
+    differs, unknown = [], []
+    for k in LIKE_FOR_LIKE_KEYS:
+        x, y = get_dotted(a, k), get_dotted(b, k)
+        if x is None and y is None:
+            continue
+        if x is None or y is None:
+            unknown.append(k)
+        elif x != y:
+            differs.append(k)
+    return differs, unknown
+
+
 def compute(frames):
     n = len(frames)
     if n == 0:
@@ -581,6 +655,7 @@ def build_report_from_text(text, source, opts):
         k, v = item.split("=", 1)
         set_dotted(cap.meta, k, parse_value(v))
 
+    phase_keys, problems = capture_phase(cap, o)
     if fmt != "ftlog" and (o["fromMark"] or o["untilMark"]):
         raise FtError("--from-mark and --until-mark only work with frame logs")
     idx = window(cap, o["skip"], o["fromMark"], o["maxSeconds"], o["untilMark"])
@@ -609,11 +684,11 @@ def build_report_from_text(text, source, opts):
         "skippedSeconds": o["skip"],
         "fromMark": o["fromMark"],
         "untilMark": o["untilMark"],
-        "ftreport": VERSION,
     }
+    report["capture"].update(phase_keys)
+    report["capture"]["ftreport"] = VERSION
     report["result"] = result
 
-    problems = []
     if seconds < o["minSeconds"]:
         problems.append("window is %s s, shorter than the %s s minimum" % (fmt0(seconds), fmt0(o["minSeconds"])))
     if result["frames"] < 100:
@@ -788,12 +863,17 @@ def cmd_compare(args):
     base_name, base = reps[0]
     print()
     for name, r in reps[1:]:
-        diff = [k for k in LIKE_FOR_LIKE_KEYS if get_dotted(r, k) != get_dotted(base, k)]
+        diff, unknown = like_for_like(base, r)
         a, b = get_dotted(base, "result.avgFps"), get_dotted(r, "result.avgFps")
         if diff:
-            print("%s vs %s: NOT like for like (differs in %s)" % (name, base_name, ", ".join(diff)))
+            print("%s vs %s: NOT like for like (differs in %s%s)" % (
+                name, base_name, ", ".join(diff), "; only one report says " + ", ".join(unknown) if unknown else ""))
             continue
         change = (b - a) / a * 100 if a else float("nan")
+        if unknown:
+            print("%s vs %s: like for like UNKNOWN (only one report says %s), avg %+.1f%%"
+                  % (name, base_name, ", ".join(unknown), change))
+            continue
         same_commit = get_dotted(r, "build.commit") and get_dotted(r, "build.commit") == get_dotted(base, "build.commit")
         msg = "%s vs %s: like for like, avg %+.1f%%" % (name, base_name, change)
         if same_commit:

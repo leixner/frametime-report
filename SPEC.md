@@ -54,11 +54,15 @@ Numbers are plain decimals (`16.667`, `-2`, `.5`, `1e3`). Values like `inf`, `na
 | `settings.raytracing` | `true` / `false` |
 | `settings.upscaler` | `none`, `fsr2`, `fsr4`, … |
 | `settings.fpsCap` | `30`, `60`, `0` (none) |
+| `settings.shaderCache` | `cold` (graphics and shader caches empty) or `warm` |
 | `scene` | see the scene list below |
+| `capture.phase` | `cold-boot` (measured from launch) or `scene` (a stretch of gameplay) |
+| `capture.clockStart` | `launch` or `first-present`; see [Cold boot](#cold-boot) |
+| `capture.firstPresentMs` | ms from launch to the first present |
 | `pc.cpu` / `pc.gpu` / `pc.driver` / `pc.os` | model and version names |
 | `pc.ramGB` / `pc.vramGB` / `pc.cores` | numbers (logical cores) |
 
-On Windows the recorders fill in all `pc.*` keys themselves, once, from a background thread. They write model names only: no host names, user names, serial numbers or paths.
+On Windows the recorders fill in all `pc.*` keys themselves, once, from a background thread. They write model names only: no host names, user names, serial numbers or paths. They also write `capture.firstPresentMs` on the first present: the time since the process was created (under Wine or Proton, since Wine created the game's process, so Wine's own start-up before that isn't included).
 
 The application usually knows `build.*` and `settings.*`. The person testing adds `scene` and `pc.*` with `ftreport summarize --set`.
 
@@ -74,7 +78,8 @@ The application usually knows `build.*` and `settings.*`. The person testing add
   "scene":    "city-walk",
   "pc":       { "cpu": "…", "gpu": "…", "ramGB": 64, "driver": "…", "os": "…" },
   "capture":  { "tool": "ftlog", "source": "run.ftlog", "seconds": 300.0,
-                "skippedSeconds": 30.0, "fromMark": null, "untilMark": null, "ftreport": "0.3.0" },
+                "skippedSeconds": 30.0, "fromMark": null, "untilMark": null,
+                "phase": "scene", "ftreport": "0.4.0" },
   "result":   { "frames": 6912, "avgFps": 23.04, "medianMs": 43.1, "p95Ms": 47.0,
                 "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "freezes": 1, "maxMs": 230.2,
                 "timeAt30Pct": 3.1, "timeAt60Pct": 0.0,
@@ -102,6 +107,15 @@ The **measured window** is every frame after the skip point. The skip point is `
 | `freezes` | Number of frames longer than 200 ms: hangs a player notices at any frame rate (the same threshold as KLBF's BM-v1) |
 | `timeAt30Pct`, `timeAt60Pct` | Share of the window's time spent in frames of at most 1000/30 ms or 1000/60 ms (that is, at 30 or 60 fps or faster), in % of the summed frame time |
 | `maxMs` | Longest frame |
+
+### Cold boot
+
+A cold-boot report covers start-up as a player sees it: from launch, black screen and shader compilation included. Set `capture.phase=cold-boot` and measure with `--skip 0` and no `--from-mark`; `settings.shaderCache` says whether the caches were empty.
+
+- `capture.clockStart` is `launch` for a cold boot unless the log or `--set` says otherwise. `first-present` keeps the frames as they are.
+- With a `launch` clock, the time before the first present (`capture.firstPresentMs`) goes in front of the frames as **one frame of that length**, and every time (marks, samples) moves with it, so 0 is the launch. It then counts toward `capture.seconds`, `avgFps`, `freezes`, `maxMs` and the time-at shares, like any other wait.
+- A `launch` clock without `capture.firstPresentMs` can't be honoured: the report says so, is not valid, and leaves `clockStart` out.
+- `capture.phase`, `capture.clockStart` and `capture.firstPresentMs` appear in the report's `capture` object only when known and valid. A wrong value (`cold_boot`, a negative time) is dropped with a note.
 
 Sums run left to right in frame order. All values are rounded to 2 decimals, **half away from zero** (`0.125` → `0.13`). These rules make every implementation give the same digits.
 
@@ -139,13 +153,22 @@ Present only when at least half of the frames in the window have **both** a CPU 
 
 - the window is shorter than `--min-seconds` (default 180);
 - fewer than 100 frames remain;
-- `--require` names a field that is missing. The default requires `settings.profile` and `scene`.
+- `--require` names a field that is missing. The default requires `settings.profile` and `scene`;
+- `capture.phase`, `capture.clockStart`, `capture.firstPresentMs` or `settings.shaderCache` has a value outside the ones above;
+- the clock starts at launch but `capture.firstPresentMs` is missing;
+- a cold-boot run skips time or starts at a mark.
 
 An invalid report is still written. It just shouldn't be counted as a result.
 
 ### Comparing reports
 
-Two reports are **like for like** when `settings.profile`, `settings.output`, `settings.internal`, `settings.raytracing`, `settings.upscaler`, `settings.fpsCap` and `scene` are equal. A key that is set in one report and missing in the other counts as different: unknown is not the same as equal.
+`compare` checks `settings.profile`, `settings.output`, `settings.internal`, `settings.raytracing`, `settings.upscaler`, `settings.fpsCap`, `settings.shaderCache`, `scene`, `capture.phase` and `capture.clockStart`:
+
+- any of them set in both reports with different values: **not like for like**;
+- otherwise, any of them set in only one report: **unknown**. It is never counted as like for like, and the reproduce check is skipped;
+- otherwise (equal, or missing in both): **like for like**.
+
+The start and end marks (`capture.fromMark`, `capture.untilMark`) are not compared on purpose: marker names differ between projects and valid runs. Use `scene` and `capture.phase` to say what was measured.
 
 Two like-for-like reports on the same `build.commit` from different PCs or people **reproduce** each other when their `avgFps` are within 10% of each other.
 

@@ -55,6 +55,10 @@
         "fpsCap": {
           "type": "number",
           "minimum": 0
+        },
+        "shaderCache": {
+          "type": "string",
+          "description": "cold or warm: whether the graphics and shader caches were empty. Other values make the report invalid."
         }
       }
     },
@@ -148,6 +152,25 @@
             "string",
             "null"
           ]
+        },
+        "phase": {
+          "enum": [
+            "cold-boot",
+            "scene"
+          ],
+          "description": "cold-boot: measured from launch; scene: a stretch of gameplay."
+        },
+        "clockStart": {
+          "enum": [
+            "launch",
+            "first-present"
+          ],
+          "description": "Where the report's clock starts. With launch, the time before the first present is one frame."
+        },
+        "firstPresentMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Milliseconds from launch to the first present."
         }
       }
     },

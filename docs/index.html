@@ -168,6 +168,13 @@
             </select>
           </label>
           <label id="customWrap" hidden>Custom scene name <input name="customScene" placeholder="e.g. night-rain"></label>
+          <label>Phase
+            <select name="capture.phase"><option value="">—</option><option value="scene">scene</option><option value="cold-boot">cold boot (from launch)</option></select>
+          </label>
+          <label>Clock starts at
+            <select name="capture.clockStart"><option value="">— (cold boot: launch)</option><option value="launch">launch</option><option value="first-present">first frame</option></select>
+          </label>
+          <label>Launch to first frame (ms) <input name="capture.firstPresentMs" type="number" min="0" step="any" placeholder="recorders add it on Windows"></label>
         </fieldset>
         <h2 style="margin-top:18px">Settings</h2>
         <fieldset class="fields">
@@ -177,6 +184,7 @@
           <label>Ray tracing <select name="settings.raytracing"><option value="">—</option><option value="false">off</option><option value="true">on</option></select></label>
           <label>Upscaler <input name="settings.upscaler" placeholder="none, fsr2, …"></label>
           <label>FPS cap <input name="settings.fpsCap" type="number" min="0" placeholder="0 = none"></label>
+          <label>Shader cache <select name="settings.shaderCache"><option value="">—</option><option value="cold">cold (empty)</option><option value="warm">warm</option></select></label>
         </fieldset>
         <h2 style="margin-top:18px">PC and build</h2>
         <fieldset class="fields">
@@ -231,10 +239,13 @@
     show($("error"), true);
   }
 
+  var FIELDS = ["settings.profile", "settings.output", "settings.internal", "settings.raytracing", "settings.upscaler",
+                "settings.fpsCap", "settings.shaderCache", "capture.phase", "capture.clockStart", "capture.firstPresentMs",
+                "pc.gpu", "pc.cpu", "pc.ramGB", "pc.driver", "pc.os", "build.repo", "build.commit"];
+
   function readOptions() {
     var f = form.elements, set = [];
-    ["settings.profile", "settings.output", "settings.internal", "settings.raytracing", "settings.upscaler",
-     "settings.fpsCap", "pc.gpu", "pc.cpu", "pc.ramGB", "pc.driver", "pc.os", "build.repo", "build.commit"]
+    FIELDS
       .forEach(function (k) { var v = f[k].value.trim(); if (v !== "") set.push(k + "=" + v); });
     var scene = f.scene.value === "custom" ? (f.customScene.value.trim() ? "custom:" + f.customScene.value.trim() : "") : f.scene.value;
     if (scene) set.push("scene=" + scene);
@@ -251,8 +262,7 @@
   function prefill(report, cap) {
     var f = form.elements;
     function put(k, v) { if (v !== null && v !== undefined && f[k] && f[k].value === "") f[k].value = String(v); }
-    ["settings.profile", "settings.output", "settings.internal", "settings.raytracing", "settings.upscaler",
-     "settings.fpsCap", "pc.gpu", "pc.cpu", "pc.ramGB", "pc.driver", "pc.os", "build.repo", "build.commit"]
+    FIELDS
       .forEach(function (k) { put(k, FtReport.getDotted(report, k)); });
     var scene = report.scene;
     if (scene && !f.scene.value) {
@@ -260,6 +270,7 @@
       else if ([].some.call(f.scene.options, function (o) { return o.value === scene; })) f.scene.value = scene;
     }
     show($("customWrap"), f.scene.value === "custom");
+    if (f["capture.phase"].value === "cold-boot") f.skip.value = "0";   // a cold boot is measured from launch
     // marks and processes
     var fm = f.fromMark, marks = Object.keys(cap.marks);
     fm.length = 1;
@@ -307,6 +318,12 @@
     if (pc.gpu) hw.push(pc.gpu + (pc.vramGB ? " (" + pc.vramGB + " GB)" : ""));
     if (pc.ramGB) hw.push(pc.ramGB + " GB RAM");
     if (pc.os) hw.push(pc.os);
+    var c = r.capture, clock = [];
+    if (c.phase) clock.push(c.phase === "cold-boot" ? "Cold boot" : "Scene");
+    if (c.clockStart) clock.push(c.clockStart === "launch" ? "clock from launch" : "clock from the first frame");
+    if (typeof c.firstPresentMs === "number") clock.push("first frame " + fmtN(c.firstPresentMs / 1000, 1) + " s after launch");
+    if (r.settings && r.settings.shaderCache) clock.push("shader cache " + r.settings.shaderCache);
+    if (clock.length) hw.push(clock.join(", "));
     $("hardware").textContent = hw.length ? hw.join(" · ") : "No hardware names in this capture (the recorders add them on Windows; or fill in PC below).";
     $("tiles").innerHTML = "";
     var has = function (k) { return typeof x[k] === "number"; };
@@ -542,6 +559,7 @@
   var timer = null;
   form.addEventListener("input", function (ev) {
     if (ev.target.name === "scene") show($("customWrap"), ev.target.value === "custom");
+    if (ev.target.name === "capture.phase" && ev.target.value === "cold-boot") form.elements.skip.value = "0";
     clearTimeout(timer);
     timer = setTimeout(run, 150);
   });

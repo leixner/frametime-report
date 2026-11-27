@@ -43,6 +43,10 @@
 //! `# sample` lines with this process's CPU % and memory, the system's CPU %
 //! and memory load, GPU % and dedicated VRAM in use. The thread that calls
 //! `frame()` does no extra work for it.
+//!
+//! On Windows the first `frame()` also writes `capture.firstPresentMs`: the
+//! time from when this process was created to the first present, for
+//! cold-boot reports (`ftreport.py --set capture.phase=cold-boot --skip 0`).
 
 #![allow(dead_code)]
 
@@ -162,6 +166,9 @@ fn record(busy: Option<(f64, f64)>) {
                 Some((cpu, gpu)) => writeln!(r.out, "{:.3},{:.3},{},{}", t, ms, busy_ms(cpu), busy_ms(gpu)),
                 None => writeln!(r.out, "{:.3},{:.3}", t, ms),
             };
+        } else if let Some(ms) = platform::since_launch_ms() {
+            // once, on the first present
+            let _ = writeln!(r.out, "# meta capture.firstPresentMs={:.1}", ms);
         }
         r.last = Some(now);
         if t - r.last_flush_ms >= 1000.0 {
@@ -246,6 +253,10 @@ mod background {
 #[cfg(not(windows))]
 mod platform {
     pub(super) const SAMPLING: bool = false;
+
+    pub(super) fn since_launch_ms() -> Option<f64> {
+        None
+    }
 
     pub(super) fn hardware() -> Vec<(String, String)> {
         let mut v = super::common_hardware();
@@ -341,6 +352,7 @@ mod platform {
         fn GetCurrentProcess() -> Handle;
         fn GetProcessTimes(p: Handle, c: *mut FileTime, e: *mut FileTime, k: *mut FileTime, u: *mut FileTime) -> i32;
         fn GetSystemTimes(idle: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+        fn GetSystemTimeAsFileTime(t: *mut FileTime);
         fn GlobalMemoryStatusEx(m: *mut MemoryStatusEx) -> i32;
         fn LoadLibraryW(name: *const u16) -> Handle;
         fn GetProcAddress(module: Handle, name: *const u8) -> *mut c_void;
@@ -496,6 +508,21 @@ mod platform {
             out.push(("pc.ramGB".into(), super::gb(m.total_phys)));
         }
         out
+    }
+
+    /// Milliseconds since this process was created (under Wine: since Wine created it).
+    pub(super) fn since_launch_ms() -> Option<f64> {
+        let (mut c, mut e, mut k, mut u, mut now) =
+            (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
+        if unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) } == 0 {
+            return None;
+        }
+        unsafe { GetSystemTimeAsFileTime(&mut now) };
+        let (start, now) = (c.ticks(), now.ticks());
+        if start == 0 || now < start {
+            return None;
+        }
+        Some((now - start) as f64 / 10_000.0) // 100 ns ticks
     }
 
     fn process_ticks() -> u64 {

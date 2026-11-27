@@ -72,7 +72,10 @@ class SchemaValidationTests(unittest.TestCase):
             lines.append("%.3f,%.3f,%.3f,%.3f" % (t, ms, ms * 0.9, ms * 0.7))
         text = "\n".join(lines) + "\n"
         for opts in ({}, {"set": ["scene=city-walk", "pc.ramGB=64", "pc.gpu=Example"]},
-                     {"skip": 0.0, "minSeconds": 0.0, "require": [], "set": ["scene=custom:test"]}):
+                     {"skip": 0.0, "minSeconds": 0.0, "require": [], "set": ["scene=custom:test"]},
+                     {"skip": 0.0, "set": ["scene=menu", "capture.phase=cold-boot", "capture.firstPresentMs=11180.5",
+                                           "settings.shaderCache=cold"]},
+                     {"skip": 0.0, "set": ["capture.phase=cold_boot", "settings.shaderCache=hot"]}):
             with self.subTest(opts=opts):
                 report = ftreport.build_report_from_text(text, "gen.ftlog", opts)
                 self.assertIn("busy", report["result"])
@@ -87,6 +90,8 @@ class SchemaValidationTests(unittest.TestCase):
             "bad limit": dict(good, result=dict(good["result"], busy={
                 "frames": 1, "cpuMs": 1, "gpuMs": 1, "gpuBoundShare": 0.5, "limit": "fast"})),
             "no checks": {k: v for k, v in good.items() if k != "checks"},
+            "unknown phase": dict(good, capture=dict(good["capture"], phase="cold_boot")),
+            "negative first present": dict(good, capture=dict(good["capture"], firstPresentMs=-1)),
         }
         for name, report in bad_cases.items():
             with self.subTest(name=name):

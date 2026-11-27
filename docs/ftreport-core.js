@@ -13,11 +13,15 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.3.0";
+  var VERSION = "0.4.0";
   var FORMAT = "frametime-report/0.1";
   var LOG_MAGIC = "# frametime-log v1";
   var LIKE_FOR_LIKE_KEYS = ["settings.profile", "settings.output", "settings.internal", "settings.raytracing",
-                            "settings.upscaler", "settings.fpsCap", "scene"];
+                            "settings.upscaler", "settings.fpsCap", "settings.shaderCache", "scene",
+                            "capture.phase", "capture.clockStart"];
+  var PHASES = ["cold-boot", "scene"];
+  var CLOCK_STARTS = ["launch", "first-present"];
+  var SHADER_CACHES = ["cold", "warm"];
   var FRAME_COLUMNS = ["MsBetweenPresents", "FrameTime", "msBetweenPresents"];
   var CPU_BUSY_COLUMNS = ["CPUBusy"];
   var GPU_BUSY_COLUMNS = ["GPUBusy", "MsGPUActive", "msGPUActive"];
@@ -331,6 +335,46 @@
     return idx;
   }
 
+  // The time from launch to the first present goes in front of the frames, as one frame.
+  function startAtLaunch(cap, firstMs) {
+    if (!cap.frames.length || firstMs <= 0) return;
+    var off = firstMs - (cap.ends[0] - cap.frames[0]);
+    cap.ends = cap.ends.map(function (e) { return e + off; });
+    Object.keys(cap.marks).forEach(function (label) { cap.marks[label] += off; });
+    cap.samples = cap.samples.map(function (s) { return [s[0] + off, s[1]]; });
+    cap.frames.unshift(firstMs);
+    cap.ends.unshift(firstMs);
+    cap.cpu.unshift(null);
+    cap.gpu.unshift(null);
+  }
+
+  function capturePhase(cap, o) {
+    var out = {}, problems = [];
+    var phase = getDotted(cap.meta, "capture.phase"), clock = getDotted(cap.meta, "capture.clockStart");
+    var first = getDotted(cap.meta, "capture.firstPresentMs"), cache = getDotted(cap.meta, "settings.shaderCache");
+    if (phase !== null && PHASES.indexOf(phase) < 0) { problems.push("capture.phase must be cold-boot or scene"); phase = null; }
+    if (clock !== null && CLOCK_STARTS.indexOf(clock) < 0) { problems.push("capture.clockStart must be launch or first-present"); clock = null; }
+    if (cache !== null && SHADER_CACHES.indexOf(cache) < 0) problems.push("settings.shaderCache must be cold or warm");
+    if (first !== null && (typeof first !== "number" || first < 0)) {
+      problems.push("capture.firstPresentMs must be a number of milliseconds");
+      first = null;
+    }
+    if (clock === null && phase === "cold-boot") clock = "launch";
+    if (clock === "launch") {
+      if (first === null) {
+        problems.push("the clock starts at launch, but capture.firstPresentMs (launch to first present) is missing");
+        clock = null;
+      } else startAtLaunch(cap, first);
+    }
+    if (phase === "cold-boot" && (o.skip || o.fromMark)) {
+      problems.push("a cold-boot run is measured from launch: use --skip 0 and no --from-mark");
+    }
+    if (phase !== null) out.phase = phase;
+    if (clock !== null) out.clockStart = clock;
+    if (first !== null) out.firstPresentMs = first;
+    return { keys: out, problems: problems };
+  }
+
   function compute(frames) {
     var n = frames.length;
     if (!n) throw new FtError("no frames in the measured window");
@@ -421,6 +465,7 @@
       setDotted(cap.meta, item.slice(0, eq), parseValue(item.slice(eq + 1)));
     });
 
+    var phase = capturePhase(cap, o), problems = phase.problems;
     if (fmt !== "ftlog" && (o.fromMark || o.untilMark)) throw new FtError("--from-mark and --until-mark only work with frame logs");
     var idx = window_(cap, o.skip, o.fromMark, o.maxSeconds, o.untilMark);
     if (!idx.length) throw new FtError("no frames in the measured window");
@@ -440,11 +485,12 @@
     });
     report.capture = {
       tool: cap.tool, source: source, seconds: r2(seconds), skippedSeconds: o.skip,
-      fromMark: o.fromMark, untilMark: o.untilMark, ftreport: VERSION
+      fromMark: o.fromMark, untilMark: o.untilMark
     };
+    Object.keys(phase.keys).forEach(function (k) { report.capture[k] = phase.keys[k]; });
+    report.capture.ftreport = VERSION;
     report.result = result;
 
-    var problems = [];
     if (seconds < o.minSeconds) problems.push("window is " + fmt0(seconds) + " s, shorter than the " + fmt0(o.minSeconds) + " s minimum");
     if (result.frames < 100) problems.push("only " + result.frames + " frames in the window");
     o.require.forEach(function (key) {
@@ -459,10 +505,16 @@
     return analyze(text, source, opts).report;
   }
 
+  /* { differs: keys with different values, unknown: keys only one report sets } */
   function likeForLike(a, b) {
-    return LIKE_FOR_LIKE_KEYS.filter(function (k) {
-      return JSON.stringify(getDotted(a, k)) !== JSON.stringify(getDotted(b, k));
+    var differs = [], unknown = [];
+    LIKE_FOR_LIKE_KEYS.forEach(function (k) {
+      var x = getDotted(a, k), y = getDotted(b, k);
+      if (x === null && y === null) return;
+      if (x === null || y === null) unknown.push(k);
+      else if (JSON.stringify(x) !== JSON.stringify(y)) differs.push(k);
     });
+    return { differs: differs, unknown: unknown };
   }
 
   return {

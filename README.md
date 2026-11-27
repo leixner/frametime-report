@@ -69,6 +69,14 @@ python ftreport.py summarize run.ftlog --from-mark drive --skip 0 --set scene=ci
 
 The web page has the same choices under *Start at mark* and *End at mark*.
 
+**Cold boot (start-up from launch):** on Windows the recorders note how long the first frame took after launch. Report the whole start-up, black screen and shader compilation included:
+
+```powershell
+python ftreport.py summarize boot.ftlog --skip 0 --max-seconds 300 --set capture.phase=cold-boot --set settings.shaderCache=cold --set scene=menu --json boot.report.json
+```
+
+The time before the first frame counts as one long frame, so it shows in avg fps, freezes and the longest frame. For PresentMon captures, add `--set capture.firstPresentMs=<ms from launch to first frame>`. `compare` keeps cold-boot and scene reports apart, and says *unknown* when only one report declares a phase, cache state or other setting.
+
 To compare runs, the first report is the baseline:
 
 ```powershell
@@ -232,7 +240,7 @@ To run the web page locally: `python -m http.server --directory docs`.
 
 ## Status
 
-- Version `0.3.0`. The format may still change based on feedback; changes so far are additive.
+- Version `0.4.0`. The format may still change based on feedback; changes so far are additive.
 - The CLI and the web page are covered by the tests above.
 - Both recorders are built, run and checked in CI on Linux, Windows and macOS, including MSVC and Rust 1.70. On Windows, CI also runs the usage sampler and checks the hardware names. The C recorder keeps decimal points under a German locale.
 

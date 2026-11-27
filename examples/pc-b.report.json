@@ -26,7 +26,7 @@
     "skippedSeconds": 30.0,
     "fromMark": "loaded",
     "untilMark": null,
-    "ftreport": "0.3.0"
+    "ftreport": "0.4.0"
   },
   "result": {
     "frames": 7085,

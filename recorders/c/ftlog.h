@@ -31,6 +31,10 @@
  * thread that calls ftlog_frame() does no extra work for it. Everything beyond
  * kernel32 is loaded at run time: nothing extra to link.
  *
+ * On Windows the first ftlog_frame() also writes capture.firstPresentMs: the
+ * time from when this process was created to the first present, for
+ * cold-boot reports (ftreport.py --set capture.phase=cold-boot --skip 0).
+ *
  * Data is flushed every second, so a crash loses at most about one second.
  * Call the ftlog_ functions from one thread, normally the thread that presents,
  * or guard them with your own lock. Every line is written with one fwrite, so
@@ -181,9 +185,21 @@ static void ftlog__write_meta(const char *key, const char *value)
 #ifdef _WIN32
 static void ftlog__start_background(void);
 static void ftlog__stop_background(void);
+/* ms since this process was created (under Wine: since Wine created it), or -1 */
+static double ftlog__since_launch_ms(void)
+{
+    FILETIME c, e, k, u, now;
+    unsigned long long start, t;
+    if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return -1.0;
+    GetSystemTimeAsFileTime(&now);
+    start = ((unsigned long long)c.dwHighDateTime << 32) | c.dwLowDateTime;
+    t = ((unsigned long long)now.dwHighDateTime << 32) | now.dwLowDateTime;
+    return (start && t >= start) ? (double)(t - start) / 10000.0 : -1.0;
+}
 #else
 static void ftlog__start_background(void) {}
 static void ftlog__stop_background(void) {}
+static double ftlog__since_launch_ms(void) { return -1.0; }
 #endif
 
 static int ftlog__init(void)
@@ -251,6 +267,15 @@ static void ftlog__record(int has_busy, double cpu_ms, double gpu_ms)
         }
         buf[len++] = '\n';
         fwrite(buf, 1, (size_t)len, ftlog__f);
+    } else {
+        /* once, on the first present: time since launch, for cold-boot reports */
+        double since = ftlog__since_launch_ms();
+        if (since >= 0.0) {
+            char buf[80];
+            int len = ftlog__cat(buf, 0, "# meta capture.firstPresentMs=");
+            len += ftlog__fixed(buf + len, since, 1);
+            ftlog__line(buf, len);
+        }
     }
     ftlog__last = now;
     ftlog__have_last = 1;

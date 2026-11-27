@@ -48,6 +48,17 @@ if windows:
         problems.append("expected usage samples (FTLOG_SAMPLE=100), got %d" % len(cap.samples))
     elif not all("cpu" in v and "ram" in v and "sysram" in v for _, v in cap.samples):
         problems.append("samples without cpu/ram/sysram: %r" % cap.samples[:2])
+    first = ftreport.get_dotted(cap.meta, "capture.firstPresentMs")
+    if not isinstance(first, (int, float)) or isinstance(first, bool) or not 0 < first < 600000:
+        problems.append("capture.firstPresentMs missing or implausible: %r" % (first,))
+    else:
+        with open(sys.argv[1], encoding="utf-8") as f:
+            boot = ftreport.build_report_from_text(f.read(), "demo", {
+                "skip": 0.0, "minSeconds": 0.0, "require": [], "set": ["capture.phase=cold-boot"]})
+        if boot["capture"].get("clockStart") != "launch" or boot["result"]["frames"] != len(cap.frames) + 1:
+            problems.append("cold-boot report did not start at launch: %r" % (boot["capture"],))
+        summary_boot = "  cold boot: first present %.1f ms after launch, %s fps from launch" % (
+            first, boot["result"]["avgFps"])
 
 summary = ""
 if "loaded-scene" in cap.marks and cap.frames:
@@ -69,6 +80,8 @@ if "loaded-scene" in cap.marks and cap.frames:
 print("%s: %d frames, marks %s%s" % (os.path.basename(sys.argv[1]), len(cap.frames), sorted(cap.marks), summary))
 if pc or cap.samples:
     print("  pc: %s | %d samples, last %r" % (pc, len(cap.samples), cap.samples[-1][1] if cap.samples else None))
+if windows and "summary_boot" in globals():
+    print(summary_boot)
 for p in problems:
     print("FAIL: " + p)
 sys.exit(1 if problems else 0)

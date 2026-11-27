@@ -278,6 +278,77 @@ class SegmentAndTimeAtTests(unittest.TestCase):
             ftreport.build_report_from_text(csv_text, "x.csv", {"untilMark": "city"})
 
 
+class ColdBootTests(unittest.TestCase):
+    """capture.phase, capture.clockStart, capture.firstPresentMs, settings.shaderCache (PortWatch #233)."""
+
+    META = [("settings.profile", "series-x"), ("scene", "city-walk")]
+
+    def build(self, meta, opts=None, frames=7000, marks=()):
+        text = ftlog_text([40.0] * frames, meta=self.META + list(meta), marks=marks)
+        o = {"skip": 0.0}
+        o.update(opts or {})
+        return ftreport.build_report_from_text(text, "boot.ftlog", o)
+
+    def test_cold_boot_counts_the_time_before_the_first_present(self):
+        r = self.build([("capture.phase", "cold-boot"), ("capture.firstPresentMs", "10000"),
+                        ("settings.shaderCache", "cold")])
+        res, cap = r["result"], r["capture"]
+        self.assertEqual(cap["phase"], "cold-boot")
+        self.assertEqual(cap["clockStart"], "launch")
+        self.assertEqual(cap["firstPresentMs"], 10000)
+        self.assertEqual(r["settings"]["shaderCache"], "cold")
+        self.assertEqual(res["frames"], 7001)                 # the 10 s gap counts as one frame
+        self.assertEqual(cap["seconds"], 290.0)               # 280 s of frames + 10 s before them
+        self.assertEqual(res["avgFps"], ftreport.r2(7001 / 290.0))
+        self.assertEqual(res["freezes"], 1)
+        self.assertEqual(res["maxMs"], 10000.0)
+        self.assertTrue(r["checks"]["valid"], r["checks"]["notes"])
+
+    def test_cold_boot_without_launch_time_is_not_valid(self):
+        r = self.build([("capture.phase", "cold-boot")])
+        self.assertEqual(r["result"]["frames"], 7000)
+        self.assertNotIn("clockStart", r["capture"])
+        self.assertFalse(r["checks"]["valid"])
+        self.assertIn("capture.firstPresentMs (launch to first present) is missing", r["checks"]["notes"][0])
+
+    def test_cold_boot_must_not_skip(self):
+        r = self.build([("capture.phase", "cold-boot"), ("capture.firstPresentMs", "800")], {"skip": 30.0})
+        self.assertFalse(r["checks"]["valid"])
+        self.assertIn("use --skip 0", " ".join(r["checks"]["notes"]))
+
+    def test_first_present_clock_keeps_the_frames(self):
+        r = self.build([("capture.clockStart", "first-present"), ("capture.firstPresentMs", "4321.5")])
+        self.assertEqual(r["result"]["frames"], 7000)
+        self.assertEqual(r["capture"]["clockStart"], "first-present")
+        self.assertEqual(r["capture"]["firstPresentMs"], 4321.5)
+        self.assertNotIn("phase", r["capture"])
+
+    def test_launch_clock_moves_marks_with_the_frames(self):
+        meta = [("capture.clockStart", "launch"), ("capture.firstPresentMs", "5000")]
+        marks = [(100000.0, "city")]
+        plain = self.build([], {"fromMark": "city", "minSeconds": 0.0}, marks=marks)
+        moved = self.build(meta, {"fromMark": "city", "minSeconds": 0.0}, marks=marks)
+        self.assertEqual(plain["result"], moved["result"])
+
+    def test_bad_values_are_reported_and_dropped(self):
+        r = self.build([("capture.phase", "cold_boot"), ("capture.clockStart", "boot"),
+                        ("capture.firstPresentMs", "soon"), ("settings.shaderCache", "hot")])
+        notes = r["checks"]["notes"]
+        self.assertFalse(r["checks"]["valid"])
+        for text in ("capture.phase must be", "capture.clockStart must be", "settings.shaderCache must be",
+                     "capture.firstPresentMs must be"):
+            self.assertTrue(any(n.startswith(text) for n in notes), text)
+        for k in ("phase", "clockStart", "firstPresentMs"):
+            self.assertNotIn(k, r["capture"])
+
+    def test_set_works_for_presentmon(self):
+        csv_text = "Application,MsBetweenPresents\n" + "\n".join(["a.exe,20.0"] * 9000)
+        r = ftreport.build_report_from_text(csv_text, "x.csv", {
+            "skip": 0.0, "set": ["capture.phase=cold-boot", "capture.firstPresentMs=2500"]})
+        self.assertEqual(r["result"]["frames"], 9001)
+        self.assertEqual(r["capture"]["clockStart"], "launch")
+
+
 class DetectPcTests(unittest.TestCase):
     def test_detect_pc_gives_names_only(self):
         pc = ftreport.detect_pc()
@@ -451,12 +522,31 @@ class CompareValidateTests(unittest.TestCase):
         c = self.report("c", 40.5, extra=[("settings.output", "1920x1080"), ("settings.internal", "1280x720")])
         code, text = run(["compare", a, b, c])
         self.assertEqual(code, 0)
-        self.assertIn("b.json vs a.json: NOT like for like (differs in settings.internal, settings.fpsCap)", text)
+        self.assertIn("b.json vs a.json: NOT like for like (differs in settings.internal; "
+                      "only one report says settings.fpsCap)", text)
         self.assertIn("c.json vs a.json: like for like", text)
+
+    def test_missing_on_one_side_is_unknown_not_like_for_like(self):
+        a = self.report("a", 40.0, extra=[("settings.fpsCap", "30")])
+        b = self.report("b", 40.0)
+        code, text = run(["compare", a, b])
+        self.assertIn("b.json vs a.json: like for like UNKNOWN (only one report says settings.fpsCap), avg +0.0%", text)
+        self.assertNotIn("reproduces", text)
+
+    def test_different_phase_is_not_like_for_like(self):
+        a = self.report("a", 40.0, extra=[("capture.phase", "scene")])
+        b = self.report("b", 40.0, extra=[("capture.phase", "cold-boot"), ("capture.firstPresentMs", "5000")])
+        code, text = run(["compare", a, b])
+        # a has no clock start (no launch time given), b starts at launch
+        self.assertIn("b.json vs a.json: NOT like for like (differs in capture.phase; "
+                      "only one report says capture.clockStart)", text)
+        r = json.load(open(b, encoding="utf-8"))
+        self.assertEqual(r["capture"]["clockStart"], "launch")
 
     def test_like_for_like_keys_cover_every_rate_setting(self):
         for key in ("settings.profile", "settings.output", "settings.internal", "settings.raytracing",
-                    "settings.upscaler", "settings.fpsCap", "scene"):
+                    "settings.upscaler", "settings.fpsCap", "settings.shaderCache", "scene",
+                    "capture.phase", "capture.clockStart"):
             self.assertIn(key, ftreport.LIKE_FOR_LIKE_KEYS)
 
     def test_validate(self):

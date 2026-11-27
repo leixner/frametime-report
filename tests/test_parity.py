@@ -152,11 +152,30 @@ class ParityTests(unittest.TestCase):
                 lines.append("%.3f,%s" % (t, repr(ms)))
         add(write(d, "partial.ftlog", "\n".join(lines) + "\n"), skip=0.0)
         add(write(d, "bad.ftlog", "# frametime-log v1\n1,abc\n"))
+        # cold boot: the launch clock moves frames, marks and samples; bad values; presentmon with --set
+        boot = jitter_log(rng, 6000, busy_every=2, marks=[(30000.0, "menu"), (60000.0, "city")],
+                          meta=[("capture.firstPresentMs", "11180.25"), ("settings.shaderCache", "cold")])
+        boot = boot.replace("t_ms,frame_ms,cpu_ms,gpu_ms\n", "t_ms,frame_ms,cpu_ms,gpu_ms\n# sample 5.5 cpu=40 gpu=12\n"
+                            "# sample 20000 cpu=80 gpu=97.5\n")
+        boot_log = write(d, "boot.ftlog", boot)
+        add(boot_log, skip=0.0, set=["capture.phase=cold-boot"])
+        add(boot_log, skip=0.0, maxSeconds=60.0, minSeconds=0.0, set=["capture.phase=cold-boot"])
+        add(boot_log, set=["capture.phase=cold-boot"])                       # skip 30: a problem
+        add(boot_log, fromMark="menu", skip=0.0, set=["capture.phase=cold-boot"])  # from a mark: a problem
+        add(boot_log, fromMark="menu", untilMark="city", skip=0.0,
+            set=["capture.clockStart=launch", "capture.phase=scene"])
+        add(boot_log, skip=0.0, set=["capture.clockStart=first-present"])
+        add(boot_log, skip=0.0, set=["capture.phase=cold-boot", "capture.firstPresentMs=0"])
+        add(boot_log, skip=0.0, set=["capture.phase=Cold-Boot", "capture.clockStart=yes", "settings.shaderCache=1",
+                                     "capture.firstPresentMs=-4"])
+        add(boot_log, skip=0.0, set=["capture.phase=cold-boot", "capture.firstPresentMs=soon"])
+        add(boot_log, skip=0.0, set=["capture.clockStart=launch", "capture.firstPresentMs=true"])
 
         pm = write(d, "pm2.csv", presentmon_2x(rng, 12000, apps=("game.exe", "dwm.exe")))
         add(pm)
         add(pm, process="dwm.exe", skip=0.0, set=["scene=menu", "settings.profile=series-s"])
         add(pm, process="nope.exe")
+        add(pm, skip=0.0, set=["capture.phase=cold-boot", "capture.firstPresentMs=9000.5"])
         add(write(d, "pmq.csv", presentmon_2x(rng, 8000, apps=("my, game.exe",), quoted=True)), skip=10.0)
         add(write(d, "cfx.csv", "// CapFrameX\nGameName,Test\n\nApplication,MsBetweenPresents\n"
                   + "\n".join("g.exe,%.3f" % rng.uniform(15, 25) for _ in range(9000)) + "\n", crlf=True),
