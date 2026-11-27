@@ -84,8 +84,12 @@
     font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--surface-0); color: var(--text-primary); min-width: 0;
   }
-  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-  @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 900px) { .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .hardware { margin: -6px 0 12px; color: var(--text-secondary); font-size: 14px; }
+  #usage th { width: auto; }
+  #usage td, #usage tr:first-child th + th { text-align: right; }
   .tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
   .tile .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
   .tile .k { font-size: 12px; color: var(--text-muted); }
@@ -135,6 +139,7 @@
   <section id="out" hidden>
     <div class="card">
       <h2 id="title">Result</h2>
+      <p class="hardware" id="hardware"></p>
       <div class="tiles" id="tiles"></div>
       <div class="verdict" id="verdict"></div>
       <div class="chartwrap">
@@ -150,6 +155,7 @@
         <fieldset class="fields">
           <label>Process <select name="process" id="process"><option value="">auto (most frames)</option></select></label>
           <label>Start at mark <select name="fromMark" id="fromMark"><option value="">start of file</option></select></label>
+          <label>End at mark <select name="untilMark" id="untilMark"><option value="">end of file</option></select></label>
           <label>Skip first (s) <input name="skip" type="number" min="0" step="1" value="30"></label>
           <label>Max length (s, 0 = all) <input name="maxSeconds" type="number" min="0" step="1" value="0"></label>
           <label>Minimum valid length (s) <input name="minSeconds" type="number" min="0" step="1" value="180"></label>
@@ -185,6 +191,11 @@
       </form>
 
       <div class="card">
+        <div id="usageWrap" hidden>
+          <h2>Usage during the run</h2>
+          <table id="usage"></table>
+          <p class="caption" id="usageNote"></p>
+        </div>
         <h2>Report</h2>
         <table id="table"></table>
         <h2 style="margin-top:18px">Checks</h2>
@@ -231,6 +242,7 @@
     return {
       process: f.process.value || null,
       fromMark: f.fromMark.value || null,
+      untilMark: f.untilMark.value || null,
       skip: n(f.skip.value, 30), maxSeconds: n(f.maxSeconds.value, 0), minSeconds: n(f.minSeconds.value, 180),
       set: set
     };
@@ -253,6 +265,10 @@
     fm.length = 1;
     marks.forEach(function (m) { fm.add(new Option(m + " (" + (cap.marks[m] / 1000).toFixed(1) + " s)", m)); });
     if (marks.indexOf("loaded") >= 0) fm.value = "loaded";
+    var um = f.untilMark;
+    um.length = 1;
+    marks.forEach(function (m) { um.add(new Option(m + " (" + (cap.marks[m] / 1000).toFixed(1) + " s)", m)); });
+    um.disabled = !marks.length;
     var ps = f.process;
     ps.length = 1;
     (cap.apps || []).forEach(function (a) { ps.add(new Option(a.name + " (" + a.frames + " frames)", a.name)); });
@@ -286,9 +302,18 @@
   function render(res) {
     var r = res.report, x = r.result;
     $("title").textContent = r.capture.source + " · " + fmtN(r.capture.seconds, 1) + " s measured";
+    var pc = r.pc || {}, hw = [];
+    if (pc.cpu) hw.push(pc.cpu);
+    if (pc.gpu) hw.push(pc.gpu + (pc.vramGB ? " (" + pc.vramGB + " GB)" : ""));
+    if (pc.ramGB) hw.push(pc.ramGB + " GB RAM");
+    if (pc.os) hw.push(pc.os);
+    $("hardware").textContent = hw.length ? hw.join(" · ") : "No hardware names in this capture (the recorders add them on Windows; or fill in PC below).";
     $("tiles").innerHTML = "";
+    var has = function (k) { return typeof x[k] === "number"; };
     [[fmtN(x.avgFps), "avg fps"], [fmtN(x.p95Ms), "p95 frame time (ms)"], [fmtN(x.low1Fps), "1% low fps"],
-     [String(x.stutters), "stutters (> 2.5 × median)"]].forEach(function (t) {
+     [String(x.stutters), "stutters (> 2.5 × median)"],
+     [has("freezes") ? String(x.freezes) : "—", "freezes (> 200 ms)"],
+     [has("timeAt30Pct") ? Math.round(x.timeAt30Pct) + "%" : "—", "of the time at ≥ 30 fps"]].forEach(function (t) {
       var d = document.createElement("div");
       d.className = "tile";
       d.innerHTML = '<div class="v"></div><div class="k"></div>';
@@ -314,7 +339,9 @@
     var rows = [
       ["Frames", String(x.frames)], ["Average fps (time-weighted)", fmtN(x.avgFps)], ["Median frame time", fmtN(x.medianMs) + " ms"],
       ["p95 / p99 frame time", fmtN(x.p95Ms) + " / " + fmtN(x.p99Ms) + " ms"], ["1% low", fmtN(x.low1Fps) + " fps"],
-      ["Stutters", String(x.stutters)], ["Longest frame", fmtN(x.maxMs) + " ms"],
+      ["Stutters / freezes", String(x.stutters) + " / " + (has("freezes") ? x.freezes : "—")],
+      ["Time at ≥ 30 / ≥ 60 fps", has("timeAt30Pct") ? fmtN(x.timeAt30Pct, 1) + "% / " + fmtN(x.timeAt60Pct, 1) + "%" : "—"],
+      ["Longest frame", fmtN(x.maxMs) + " ms"],
       ["Scene", r.scene || "—"], ["Profile / output", (FtReport.getDotted(r, "settings.profile") || "—") + " / " + (FtReport.getDotted(r, "settings.output") || "—")],
       ["Capture", r.capture.tool]
     ];
@@ -343,6 +370,25 @@
         .replace(", pick one with --process", ", pick one under Process");
       c.appendChild(l);
     });
+
+    var u = x.usage, ut = $("usage");
+    ut.innerHTML = "";
+    show($("usageWrap"), !!u);
+    if (u) {
+      var head2 = ut.insertRow();
+      ["", "median", "peak"].forEach(function (h) { var th = document.createElement("th"); th.textContent = h; head2.appendChild(th); });
+      [["cpuPct", "CPU (this process, all cores)", "%", 0], ["ramMB", "RAM (this process)", " MB", 0],
+       ["gpuPct", "GPU (busiest engine)", "%", 0], ["vramMB", "VRAM in use", " MB", 0],
+       ["sysCpuPct", "System CPU", "%", 0], ["sysRamPct", "System memory load", "%", 0]].forEach(function (m) {
+        if (!u[m[0]]) return;
+        var tr = ut.insertRow(), th = document.createElement("th");
+        th.textContent = m[1];
+        tr.appendChild(th);
+        tr.insertCell().textContent = fmtN(u[m[0]].median, m[3]) + m[2];
+        tr.insertCell().textContent = fmtN(u[m[0]].max, m[3]) + m[2];
+      });
+      $("usageNote").textContent = u.samples + " samples in the measured window.";
+    }
 
     $("json").textContent = JSON.stringify(r, null, 2);
     drawChart(res);

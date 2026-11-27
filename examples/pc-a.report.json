@@ -25,7 +25,8 @@
     "seconds": 306.43,
     "skippedSeconds": 30.0,
     "fromMark": "loaded",
-    "ftreport": "0.2.0"
+    "untilMark": null,
+    "ftreport": "0.3.0"
   },
   "result": {
     "frames": 7061,
@@ -37,6 +38,8 @@
     "stutters": 22,
     "freezes": 6,
     "maxMs": 411.8,
+    "timeAt30Pct": 0.05,
+    "timeAt60Pct": 0.0,
     "busy": {
       "frames": 7061,
       "cpuMs": 28.93,

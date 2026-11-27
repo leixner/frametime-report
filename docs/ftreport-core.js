@@ -13,7 +13,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.2.0";
+  var VERSION = "0.3.0";
   var FORMAT = "frametime-report/0.1";
   var LOG_MAGIC = "# frametime-log v1";
   var LIKE_FOR_LIKE_KEYS = ["settings.profile", "settings.output", "settings.internal", "settings.raytracing",
@@ -25,6 +25,8 @@
   var SWAPCHAIN_COLUMNS = ["SwapChainAddress", "SwapChain"];
   var STUTTER_FACTOR = 2.5;
   var FREEZE_MS = 200.0;
+  var MS_AT_30 = 1000.0 / 30.0;
+  var MS_AT_60 = 1000.0 / 60.0;
   var SAMPLE_KEYS = [["cpu", "cpuPct"], ["ram", "ramMB"], ["gpu", "gpuPct"], ["vram", "vramMB"],
                      ["syscpu", "sysCpuPct"], ["sysram", "sysRamPct"]];
   var BUSY_MIN_SHARE = 0.5;
@@ -302,17 +304,21 @@
 
   // ---- window and statistics
 
-  function window_(cap, skipS, fromMark, maxS) {
-    var startMs = 0.0;
-    if (fromMark) {
-      if (!Object.prototype.hasOwnProperty.call(cap.marks, fromMark)) {
-        throw new FtError("mark '" + fromMark + "' not in log (have: " + (Object.keys(cap.marks).sort().join(", ") || "none") + ")");
-      }
-      startMs = cap.marks[fromMark];
+  function markTime(cap, label) {
+    if (!Object.prototype.hasOwnProperty.call(cap.marks, label)) {
+      throw new FtError("mark '" + label + "' not in log (have: " + (Object.keys(cap.marks).sort().join(", ") || "none") + ")");
     }
+    return cap.marks[label];
+  }
+
+  function window_(cap, skipS, fromMark, maxS, untilMark) {
+    var startMs = fromMark ? markTime(cap, fromMark) : 0.0;
     startMs += skipS * 1000.0;
+    var endMs = untilMark ? markTime(cap, untilMark) : null;
     var idx = [];
-    for (var i = 0; i < cap.frames.length; i++) if (cap.ends[i] - cap.frames[i] >= startMs - 1e-9) idx.push(i);
+    for (var i = 0; i < cap.frames.length; i++) {
+      if (cap.ends[i] - cap.frames[i] >= startMs - 1e-9 && (endMs === null || cap.ends[i] <= endMs + 1e-9)) idx.push(i);
+    }
     if (maxS) {
       var out = [], acc = 0.0;
       for (var j = 0; j < idx.length; j++) {
@@ -330,9 +336,15 @@
     if (!n) throw new FtError("no frames in the measured window");
     var sumMs = total(frames), s = sortedCopy(frames), med = median(s);
     var k = Math.max(1, Math.ceil(0.01 * n)), worst = s.slice(n - k), stutters = 0, freezes = 0;
+    var at30 = 0.0, at60 = 0.0;
     for (var i = 0; i < n; i++) {
-      if (frames[i] > STUTTER_FACTOR * med) stutters++;
-      if (frames[i] > FREEZE_MS) freezes++;
+      var x = frames[i];
+      if (x > STUTTER_FACTOR * med) stutters++;
+      if (x > FREEZE_MS) freezes++;
+      if (x <= MS_AT_30) {
+        at30 += x;
+        if (x <= MS_AT_60) at60 += x;
+      }
     }
     return {
       result: {
@@ -344,7 +356,9 @@
         low1Fps: r2(1000.0 / (total(worst) / k)),
         stutters: stutters,
         freezes: freezes,
-        maxMs: r2(s[s.length - 1])
+        maxMs: r2(s[s.length - 1]),
+        timeAt30Pct: r2(at30 / sumMs * 100.0),
+        timeAt60Pct: r2(at60 / sumMs * 100.0)
       },
       seconds: sumMs / 1000.0
     };
@@ -384,7 +398,7 @@
 
   function defaultOptions() {
     return {
-      format: "auto", process: null, column: null, skip: 30.0, fromMark: null,
+      format: "auto", process: null, column: null, skip: 30.0, fromMark: null, untilMark: null,
       maxSeconds: 0.0, minSeconds: 180.0, require: ["settings.profile", "scene"], set: []
     };
   }
@@ -407,8 +421,9 @@
       setDotted(cap.meta, item.slice(0, eq), parseValue(item.slice(eq + 1)));
     });
 
-    if (fmt !== "ftlog" && o.fromMark) throw new FtError("--from-mark only works with frame logs");
-    var idx = window_(cap, o.skip, o.fromMark, o.maxSeconds);
+    if (fmt !== "ftlog" && (o.fromMark || o.untilMark)) throw new FtError("--from-mark and --until-mark only work with frame logs");
+    var idx = window_(cap, o.skip, o.fromMark, o.maxSeconds, o.untilMark);
+    if (!idx.length) throw new FtError("no frames in the measured window");
     var frames = idx.map(function (i) { return cap.frames[i]; });
     var stats = compute(frames), result = stats.result, seconds = stats.seconds;
     var busy = analyzeBusy(frames, idx.map(function (i) { return cap.cpu[i]; }), idx.map(function (i) { return cap.gpu[i]; }));
@@ -425,7 +440,7 @@
     });
     report.capture = {
       tool: cap.tool, source: source, seconds: r2(seconds), skippedSeconds: o.skip,
-      fromMark: o.fromMark, ftreport: VERSION
+      fromMark: o.fromMark, untilMark: o.untilMark, ftreport: VERSION
     };
     report.result = result;
 

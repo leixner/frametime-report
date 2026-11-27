@@ -83,6 +83,10 @@ class ParityTests(unittest.TestCase):
         add(log, skip=0.0, minSeconds=0.0, require=[])
         add(log, fromMark="loaded", skip=5.0, set=["scene=city-walk", "pc.gpu=Example GPU", "settings.raytracing=yes"])
         add(log, fromMark="city", maxSeconds=60.0, set=["scene=custom:x"])
+        add(log, fromMark="loaded", untilMark="city", skip=0.0, minSeconds=0.0)
+        add(log, untilMark="city", skip=3.0)
+        add(log, fromMark="city", untilMark="loaded")          # empty window: an error on both sides
+        add(log, untilMark="missing")
         add(log, fromMark="missing")
         add(write(d, "b.ftlog", jitter_log(rng, 3000), bom=True, crlf=True), skip=1.0, set=["scene=boat"])
         add(write(d, "c.ftlog", "# frametime-log v1\n16\n17.5\n\n-3\n0\n18.25\n"), skip=0.0)

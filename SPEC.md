@@ -74,9 +74,10 @@ The application usually knows `build.*` and `settings.*`. The person testing add
   "scene":    "city-walk",
   "pc":       { "cpu": "…", "gpu": "…", "ramGB": 64, "driver": "…", "os": "…" },
   "capture":  { "tool": "ftlog", "source": "run.ftlog", "seconds": 300.0,
-                "skippedSeconds": 30.0, "fromMark": null, "ftreport": "0.1.0" },
+                "skippedSeconds": 30.0, "fromMark": null, "untilMark": null, "ftreport": "0.3.0" },
   "result":   { "frames": 6912, "avgFps": 23.04, "medianMs": 43.1, "p95Ms": 47.0,
                 "p99Ms": 61.2, "low1Fps": 15.8, "stutters": 4, "freezes": 1, "maxMs": 230.2,
+                "timeAt30Pct": 3.1, "timeAt60Pct": 0.0,
                 "busy": { "frames": 6912, "cpuMs": 41.2, "gpuMs": 32.5,
                           "gpuBoundShare": 0.04, "limit": "cpu" } },
   "checks":   { "valid": true, "notes": [] }
@@ -87,7 +88,7 @@ A JSON Schema for this format is at [`docs/schema/report-0.1.schema.json`](docs/
 
 ### Definitions
 
-The **measured window** is every frame after the skip point. The skip point is `--skip` seconds (default 30) after the start, or after the mark given with `--from-mark`. `--max-seconds` can shorten the window.
+The **measured window** is every frame after the skip point. The skip point is `--skip` seconds (default 30) after the start, or after the mark given with `--from-mark`. With `--until-mark`, the window ends at that mark: only frames that end at or before it count. `--max-seconds` can shorten the window further. An empty window is an error.
 
 | Field | Definition |
 |---|---|
@@ -99,6 +100,7 @@ The **measured window** is every frame after the skip point. The skip point is `
 | `low1Fps` | `1000 ÷ mean(the slowest ceil(1% × n) frame times)` |
 | `stutters` | Number of frames longer than `2.5 × medianMs`: hitches relative to the run's own pace |
 | `freezes` | Number of frames longer than 200 ms: hangs a player notices at any frame rate (the same threshold as KLBF's BM-v1) |
+| `timeAt30Pct`, `timeAt60Pct` | Share of the window's time spent in frames of at most 1000/30 ms or 1000/60 ms (that is, at 30 or 60 fps or faster), in % of the summed frame time |
 | `maxMs` | Longest frame |
 
 Sums run left to right in frame order. All values are rounded to 2 decimals, **half away from zero** (`0.125` → `0.13`). These rules make every implementation give the same digits.

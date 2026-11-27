@@ -142,6 +142,12 @@
         "ftreport": {
           "type": "string",
           "description": "Version of the tool that wrote the report."
+        },
+        "untilMark": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -360,6 +366,18 @@
               "description": "Whole system memory load, %."
             }
           }
+        },
+        "timeAt30Pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Share of the window's time in frames at 30 fps or faster, %."
+        },
+        "timeAt60Pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Share of the window's time in frames at 60 fps or faster, %."
         }
       }
     },

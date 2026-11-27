@@ -26,7 +26,7 @@ import os
 import re
 import sys
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 FORMAT = "frametime-report/0.1"
 LOG_MAGIC = "# frametime-log v1"
 # Every setting that changes the frame rate. A key set in one report and missing
@@ -47,6 +47,8 @@ APP_COLUMNS = ("Application", "ProcessName")
 SWAPCHAIN_COLUMNS = ("SwapChainAddress", "SwapChain")
 STUTTER_FACTOR = 2.5
 FREEZE_MS = 200.0         # same threshold as KLBF's BM-v1 "freezes"
+MS_AT_30 = 1000.0 / 30.0  # frames this fast or faster count toward "time at >= 30 fps"
+MS_AT_60 = 1000.0 / 60.0
 # "# sample" keys -> report keys under result.usage
 SAMPLE_KEYS = (
     ("cpu", "cpuPct"),
@@ -349,15 +351,19 @@ def most_common(counts):
 # --------------------------------------------------------------------------
 # window and statistics
 
-def window(cap, skip_s, from_mark, max_s):
+def mark_time(cap, label):
+    if label not in cap.marks:
+        raise FtError("mark %r not in log (have: %s)" % (label, ", ".join(sorted(cap.marks)) or "none"))
+    return cap.marks[label]
+
+
+def window(cap, skip_s, from_mark, max_s, until_mark=None):
     """Indices of the frames in the measured window."""
-    start_ms = 0.0
-    if from_mark:
-        if from_mark not in cap.marks:
-            raise FtError("mark %r not in log (have: %s)" % (from_mark, ", ".join(sorted(cap.marks)) or "none"))
-        start_ms = cap.marks[from_mark]
+    start_ms = mark_time(cap, from_mark) if from_mark else 0.0
     start_ms += skip_s * 1000.0
-    idx = [i for i in range(len(cap.frames)) if cap.ends[i] - cap.frames[i] >= start_ms - 1e-9]
+    end_ms = mark_time(cap, until_mark) if until_mark else None
+    idx = [i for i in range(len(cap.frames))
+           if cap.ends[i] - cap.frames[i] >= start_ms - 1e-9 and (end_ms is None or cap.ends[i] <= end_ms + 1e-9)]
     if max_s:
         out, acc = [], 0.0
         for i in idx:
@@ -379,11 +385,16 @@ def compute(frames):
     k = max(1, math.ceil(0.01 * n))
     worst = s[n - k:]
     stutters = freezes = 0
+    at30 = at60 = 0.0
     for x in frames:
         if x > STUTTER_FACTOR * med:
             stutters += 1
         if x > FREEZE_MS:
             freezes += 1
+        if x <= MS_AT_30:
+            at30 += x
+            if x <= MS_AT_60:
+                at60 += x
     return {
         "frames": n,
         "avgFps": r2(n / (sum_ms / 1000.0)),
@@ -394,6 +405,8 @@ def compute(frames):
         "stutters": stutters,
         "freezes": freezes,
         "maxMs": r2(s[-1]),
+        "timeAt30Pct": r2(at30 / sum_ms * 100.0),
+        "timeAt60Pct": r2(at60 / sum_ms * 100.0),
     }, sum_ms / 1000.0
 
 
@@ -442,12 +455,103 @@ def analyze_busy(frames, cpu, gpu):
 
 
 # --------------------------------------------------------------------------
+# this computer's hardware names (--detect-pc)
+
+def _gb(nbytes):
+    """Whole GB, rounded half up: the same rule as the recorders."""
+    return int(math.floor(nbytes / 1073741824.0 + 0.5))
+
+
+def detect_pc():
+    """Model names of this computer: CPU, GPU and VRAM, driver, RAM, OS, cores.
+
+    Model names only: nothing that identifies a person or a machine. Windows reads
+    the same registry keys as the recorders; elsewhere only what is easy to get.
+    """
+    import platform
+    pc = {}
+    n = os.cpu_count()
+    if n:
+        pc["cores"] = n
+    if sys.platform == "win32":
+        import ctypes
+        import winreg
+
+        def reg(path, name):
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                    return winreg.QueryValueEx(key, name)[0]
+            except OSError:
+                return None
+
+        def as_int(v):
+            if isinstance(v, int):
+                return v
+            if isinstance(v, (bytes, bytearray)) and len(v) in (4, 8):
+                return int.from_bytes(bytes(v), "little")
+            return 0
+
+        cpu = reg(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString")
+        if cpu and str(cpu).strip():
+            pc["cpu"] = str(cpu).strip()
+        best = None
+        for i in range(16):
+            path = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\%04d" % i
+            name = reg(path, "DriverDesc")
+            if not name or not str(name).strip():
+                continue
+            vram = as_int(reg(path, "HardwareInformation.qwMemorySize")) or as_int(reg(path, "HardwareInformation.MemorySize"))
+            if best is None or vram > best[0]:
+                best = (vram, str(name).strip(), reg(path, "DriverVersion"))
+        if best:
+            pc["gpu"] = best[1]
+            if best[0]:
+                pc["vramGB"] = _gb(best[0])
+            if best[2]:
+                pc["driver"] = str(best[2]).strip()
+        nt = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+        build = reg(nt, "CurrentBuild")
+        if build:
+            b = int(build) if str(build).isdigit() else 0
+            name = "Windows 11" if b >= 22000 else "Windows 10" if b >= 10240 else "Windows"
+            display = reg(nt, "DisplayVersion")
+            pc["os"] = "%s (build %s, %s)" % (name, build, display) if display else "%s (build %s)" % (name, build)
+
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        m = MemoryStatusEx()
+        m.dwLength = ctypes.sizeof(MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+            pc["ramGB"] = _gb(m.ullTotalPhys)
+    else:
+        pc["os"] = "%s %s" % (platform.system(), platform.release())
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if line.lower().startswith("model name"):
+                        pc["cpu"] = line.split(":", 1)[1].strip()
+                        break
+        except OSError:
+            pass
+        try:
+            pc["ramGB"] = _gb(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+        except (ValueError, OSError, AttributeError):
+            pass
+    return pc
+
+
+# --------------------------------------------------------------------------
 # report
 
 def default_options():
     return {
-        "format": "auto", "process": None, "column": None, "skip": 30.0, "fromMark": None,
+        "format": "auto", "process": None, "column": None, "skip": 30.0, "fromMark": None, "untilMark": None,
         "maxSeconds": 0.0, "minSeconds": 180.0, "require": ["settings.profile", "scene"], "set": [],
+        "detectPc": False,
     }
 
 
@@ -465,15 +569,23 @@ def build_report_from_text(text, source, opts):
     else:
         raise FtError("unknown format %s" % fmt)
 
+    if o["detectPc"]:
+        # this PC's names fill in only what the log doesn't already say; --set still wins
+        for k, v in detect_pc().items():
+            if get_dotted(cap.meta, "pc." + k) is None:
+                set_dotted(cap.meta, "pc." + k, v)
+
     for item in o["set"]:
         if "=" not in item:
             raise FtError("--set needs key=value, got %r" % item)
         k, v = item.split("=", 1)
         set_dotted(cap.meta, k, parse_value(v))
 
-    if fmt != "ftlog" and o["fromMark"]:
-        raise FtError("--from-mark only works with frame logs")
-    idx = window(cap, o["skip"], o["fromMark"], o["maxSeconds"])
+    if fmt != "ftlog" and (o["fromMark"] or o["untilMark"]):
+        raise FtError("--from-mark and --until-mark only work with frame logs")
+    idx = window(cap, o["skip"], o["fromMark"], o["maxSeconds"], o["untilMark"])
+    if not idx:
+        raise FtError("no frames in the measured window")
     frames = [cap.frames[i] for i in idx]
     result, seconds = compute(frames)
     busy = analyze_busy(frames, [cap.cpu[i] for i in idx], [cap.gpu[i] for i in idx])
@@ -496,6 +608,7 @@ def build_report_from_text(text, source, opts):
         "seconds": r2(seconds),
         "skippedSeconds": o["skip"],
         "fromMark": o["fromMark"],
+        "untilMark": o["untilMark"],
         "ftreport": VERSION,
     }
     report["result"] = result
@@ -516,7 +629,8 @@ def build_report_from_text(text, source, opts):
 def options_from_args(args):
     return {
         "format": args.format, "process": args.process, "column": args.column, "skip": args.skip,
-        "fromMark": args.from_mark, "maxSeconds": args.max_seconds, "minSeconds": args.min_seconds,
+        "fromMark": args.from_mark, "untilMark": args.until_mark,
+        "maxSeconds": args.max_seconds, "minSeconds": args.min_seconds, "detectPc": args.detect_pc,
         "require": [k for k in args.require.split(",") if k.strip()] if args.require else [],
         "set": args.set or [],
     }
@@ -569,13 +683,15 @@ def cmd_summarize(args):
     report = build_report(args)
     res = report["result"]
     print("%s  |  %s  |  scene %s" % (report["capture"]["source"], fmt_settings(report), report.get("scene", "?")))
-    print("  %d frames over %.1f s (skipped %s s%s)" % (
+    print("  %d frames over %.1f s (skipped %s s%s%s)" % (
         res["frames"], report["capture"]["seconds"], fmt0(args.skip),
-        ", from mark %s" % args.from_mark if args.from_mark else ""))
+        ", from mark %s" % args.from_mark if args.from_mark else "",
+        ", until mark %s" % args.until_mark if args.until_mark else ""))
     print("  avg %.2f fps | median %.2f ms | p95 %.2f ms | p99 %.2f ms | 1%% low %.2f fps | max %.2f ms" % (
         res["avgFps"], res["medianMs"], res["p95Ms"], res["p99Ms"], res["low1Fps"], res["maxMs"]))
-    print("  stutters %d (> %s x median) | freezes %d (> %s ms)" % (
-        res["stutters"], STUTTER_FACTOR, res["freezes"], fmt0(FREEZE_MS)))
+    print("  stutters %d (> %s x median) | freezes %d (> %s ms) | time at >= 30 fps %s%% | >= 60 fps %s%%" % (
+        res["stutters"], STUTTER_FACTOR, res["freezes"], fmt0(FREEZE_MS), fmt0(res["timeAt30Pct"]),
+        fmt0(res["timeAt60Pct"])))
     if "busy" in res:
         print("  " + busy_line(res["busy"]))
     if "usage" in res:
@@ -699,6 +815,9 @@ def main(argv=None):
     s.add_argument("--column", help="PresentMon: frame-time column to use")
     s.add_argument("--skip", type=float, default=30.0, help="seconds to drop at the start (default 30)")
     s.add_argument("--from-mark", help="frame logs: start counting at this mark (plus --skip)")
+    s.add_argument("--until-mark", help="frame logs: stop counting at this mark")
+    s.add_argument("--detect-pc", action="store_true",
+                   help="fill in pc.* from this computer where the log doesn't say (model names only)")
     s.add_argument("--max-seconds", type=float, default=0.0, help="cap the measured window")
     s.add_argument("--min-seconds", type=float, default=180.0, help="shorter windows are invalid (default 180)")
     s.add_argument("--require", default="settings.profile,scene", help="comma-separated fields a valid report needs")

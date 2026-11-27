@@ -238,6 +238,66 @@ class FreezeAndUsageTests(unittest.TestCase):
             ftreport.read_ftlog("# frametime-log v1\n# sample abc cpu=1\n")
 
 
+class SegmentAndTimeAtTests(unittest.TestCase):
+    def test_time_at_30_and_60_fps(self):
+        # 10 s at 10 ms, 10 s at 25 ms, 10 s at 50 ms: 30 s in total
+        frames = [10.0] * 1000 + [25.0] * 400 + [50.0] * 200
+        r, _ = ftreport.compute(frames)
+        self.assertEqual(r["timeAt60Pct"], 33.33)       # only the 10 ms frames
+        self.assertEqual(r["timeAt30Pct"], 66.67)       # 10 ms and 25 ms frames
+        r, _ = ftreport.compute([1000.0 / 30.0] * 10 + [1000.0 / 60.0] * 10)
+        self.assertEqual(r["timeAt30Pct"], 100.0)       # exactly 30 fps counts
+        self.assertEqual(r["timeAt60Pct"], 33.33)
+
+    def test_until_mark_ends_the_window(self):
+        lines = ["# frametime-log v1"]
+        t = 0.0
+        for i in range(3000):                           # 120 s of 40 ms frames
+            t += 40.0
+            lines.append("%.3f,40.000" % t)
+            if i == 999:
+                lines.append("# mark %.3f city" % t)       # at 40 s
+            if i == 1999:
+                lines.append("# mark %.3f drive" % t)      # at 80 s
+        text = "\n".join(lines)
+        r = ftreport.build_report_from_text(text, "s.ftlog", {"fromMark": "city", "untilMark": "drive", "skip": 0.0,
+                                                              "minSeconds": 0.0, "require": []})
+        self.assertEqual(r["result"]["frames"], 1000)
+        self.assertEqual(r["capture"]["seconds"], 40.0)
+        self.assertEqual(r["capture"]["untilMark"], "drive")
+        r = ftreport.build_report_from_text(text, "s.ftlog", {"untilMark": "city", "skip": 0.0, "require": []})
+        self.assertEqual(r["result"]["frames"], 1000)
+        with self.assertRaises(ftreport.FtError):     # the window is empty
+            ftreport.build_report_from_text(text, "s.ftlog", {"fromMark": "drive", "untilMark": "city", "skip": 0.0})
+        with self.assertRaises(ftreport.FtError):
+            ftreport.build_report_from_text(text, "s.ftlog", {"untilMark": "nope"})
+
+    def test_until_mark_needs_a_frame_log(self):
+        csv_text = "Application,MsBetweenPresents\n" + "\n".join(["a.exe,20.0"] * 200)
+        with self.assertRaises(ftreport.FtError):
+            ftreport.build_report_from_text(csv_text, "x.csv", {"untilMark": "city"})
+
+
+class DetectPcTests(unittest.TestCase):
+    def test_detect_pc_gives_names_only(self):
+        pc = ftreport.detect_pc()
+        self.assertIn("cores", pc)
+        self.assertIn("os", pc)
+        allowed = {"cores", "cpu", "gpu", "vramGB", "driver", "os", "ramGB"}
+        self.assertTrue(set(pc) <= allowed, set(pc) - allowed)
+        if sys.platform == "win32":
+            for key in ("cpu", "ramGB"):
+                self.assertIn(key, pc)
+            self.assertTrue(pc["os"].startswith("Windows"))
+
+    def test_detect_pc_does_not_override_the_log_or_set(self):
+        text = "# frametime-log v1\n# meta pc.gpu=From The Log\n" + "\n".join(["16.6"] * 500)
+        r = ftreport.build_report_from_text(text, "x", {"skip": 0.0, "detectPc": True, "set": ["pc.cpu=From Set"]})
+        self.assertEqual(r["pc"]["gpu"], "From The Log")
+        self.assertEqual(r["pc"]["cpu"], "From Set")
+        self.assertIn("cores", r["pc"])
+
+
 class BusyTests(unittest.TestCase):
     def check(self, cpu, gpu, frame, limit, share=None):
         n = len(cpu)

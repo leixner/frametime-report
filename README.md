@@ -9,6 +9,7 @@ Frame-rate numbers you can compare.
 - the time-weighted average fps;
 - median, p95 and p99 frame times;
 - 1% lows, stutters (relative hitches) and freezes (frames over 200 ms);
+- how much of the run was at 30 or 60 fps or better;
 - **whether the run was CPU-bound, GPU-bound or capped**, when CPU and GPU busy times are available;
 - **CPU, RAM, GPU and VRAM usage** during the run, and the hardware it ran on, recorded automatically on Windows;
 - the settings and scene it was measured in, and whether the run was long enough to count.
@@ -19,7 +20,7 @@ It doesn't depend on any particular application, engine or graphics API. It work
 pc-b.ftlog  |  series-x 1920x1080  |  scene city-walk
   7085 frames over 320.7 s (skipped 30 s, from mark loaded)
   avg 22.09 fps | median 44.99 ms | p95 50.00 ms | p99 51.98 ms | 1% low 12.86 fps | max 305.49 ms
-  stutters 16 (> 2.5 x median) | freezes 3 (> 200 ms)
+  stutters 16 (> 2.5 x median) | freezes 3 (> 200 ms) | time at >= 30 fps 0% | >= 60 fps 0%
   cpu busy 41.12 ms | gpu busy 32.47 ms | gpu >= cpu on 0% of frames | CPU-bound
   usage (median, 641 samples): cpu 11% (peak 17) | ram 9898 MB (peak 10034) | gpu 71% (peak 77) | vram 9400 MB (peak 9497) | system cpu 38% (peak 47) | system ram 81% (peak 82)
   pc: Example CPU B 6-Core | Example GPU B 12 GB | 32 GB RAM | Windows 10 (build 19045, 22H2)
@@ -56,6 +57,17 @@ Defaults (see `python ftreport.py summarize -h`):
 - a report needs `settings.profile` and `scene` to count as valid (`--require`).
 
 Pick `scene` from the short list in [SPEC.md](SPEC.md#3-scene-ids), so results can be grouped.
+
+Add `--detect-pc` to fill in this computer's CPU, GPU and VRAM, driver, RAM, OS and cores (model names only) wherever the capture doesn't already say. Values from the log and from `--set` win.
+
+**One session, several scenes:** if the log has marks (`ftlog::mark("city")`, `ftlog::mark("drive")`), report each stretch separately:
+
+```powershell
+python ftreport.py summarize run.ftlog --from-mark city --until-mark drive --skip 0 --set scene=city-walk --json city.report.json
+python ftreport.py summarize run.ftlog --from-mark drive --skip 0 --set scene=city-drive --json drive.report.json
+```
+
+The web page has the same choices under *Start at mark* and *End at mark*.
 
 To compare runs, the first report is the baseline:
 
@@ -184,6 +196,7 @@ Call it once per image actually handed to the display, on the host side: after `
 | `low1Fps` | fps over the slowest 1% of frames |
 | `stutters` | frames longer than 2.5 × the median: hitches relative to the run's own pace |
 | `freezes` | frames longer than 200 ms: hangs you notice at any frame rate (same threshold as KLBF's BM-v1) |
+| `timeAt30Pct`, `timeAt60Pct` | share of the run's time at 30 / 60 fps or better: "how much of it was playable" in one number |
 | `usage` | median and peak of the sampled CPU, RAM, GPU, VRAM and system load during the measured window |
 | `busy.limit` | `gpu` / `cpu`: which side is busy longer on most frames. `mixed`: neither clearly. `pacing`: neither is busy for 75% of the frame, so a cap, vsync or waits set the pace |
 | `checks.valid` | long enough, enough frames, required fields present |
@@ -219,7 +232,7 @@ To run the web page locally: `python -m http.server --directory docs`.
 
 ## Status
 
-- Version `0.2.0`. The format may still change based on feedback; changes so far are additive.
+- Version `0.3.0`. The format may still change based on feedback; changes so far are additive.
 - The CLI and the web page are covered by the tests above.
 - Both recorders are built, run and checked in CI on Linux, Windows and macOS, including MSVC and Rust 1.70. On Windows, CI also runs the usage sampler and checks the hardware names. The C recorder keeps decimal points under a German locale.
 
