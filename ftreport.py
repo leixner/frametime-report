@@ -400,14 +400,13 @@ def start_at_launch(cap, first_ms):
     cap.gpu.insert(0, None)
 
 
-def capture_phase(cap, o):
-    """Read and check capture.phase, capture.clockStart, capture.firstPresentMs and
-    settings.shaderCache. Returns ({report capture keys}, [problems])."""
-    out, problems = {}, []
-    phase = get_dotted(cap.meta, "capture.phase")
-    clock = get_dotted(cap.meta, "capture.clockStart")
-    first = get_dotted(cap.meta, "capture.firstPresentMs")
-    cache = get_dotted(cap.meta, "settings.shaderCache")
+def capture_metadata(meta):
+    """Normalize the optional clock fields and check their dependencies."""
+    problems = []
+    phase = get_dotted(meta, "capture.phase")
+    clock = get_dotted(meta, "capture.clockStart")
+    first = get_dotted(meta, "capture.firstPresentMs")
+    cache = get_dotted(meta, "settings.shaderCache")
     if phase is not None and phase not in PHASES:
         problems.append("capture.phase must be cold-boot or scene")
         phase = None
@@ -416,23 +415,27 @@ def capture_phase(cap, o):
         clock = None
     if cache is not None and cache not in SHADER_CACHES:
         problems.append("settings.shaderCache must be cold or warm")
-    if first is not None and (isinstance(first, bool) or not isinstance(first, (int, float)) or first < 0):
+    if first is not None and (isinstance(first, bool) or not isinstance(first, (int, float))
+                              or first < 0 or (isinstance(first, float) and not math.isfinite(first))):
         problems.append("capture.firstPresentMs must be a number of milliseconds")
         first = None
     if clock is None and phase == "cold-boot":
         clock = "launch"
-    if clock == "launch":
-        if first is None:
-            problems.append("the clock starts at launch, but capture.firstPresentMs (launch to first present) is missing")
-            clock = None
-        else:
-            start_at_launch(cap, first)
-    if phase == "cold-boot" and (o["skip"] or o["fromMark"]):
+    if clock == "launch" and first is None:
+        problems.append("the clock starts at launch, but capture.firstPresentMs (launch to first present) is missing")
+        clock = None
+    fields = {"phase": phase, "clockStart": clock, "firstPresentMs": first}
+    return {key: value for key, value in fields.items() if value is not None}, problems
+
+
+def capture_phase(cap, o):
+    """Check capture metadata, then move the frame clock when launch is selected."""
+    fields, problems = capture_metadata(cap.meta)
+    if fields.get("clockStart") == "launch":
+        start_at_launch(cap, fields["firstPresentMs"])
+    if fields.get("phase") == "cold-boot" and (o["skip"] or o["fromMark"]):
         problems.append("a cold-boot run is measured from launch: use --skip 0 and no --from-mark")
-    for k, v in (("phase", phase), ("clockStart", clock), ("firstPresentMs", first)):
-        if v is not None:
-            out[k] = v
-    return out, problems
+    return fields, problems
 
 
 def like_for_like(a, b):
@@ -813,6 +816,8 @@ def validate_report(r):
     cap = r.get("capture")
     if not isinstance(cap, dict) or not isinstance(cap.get("seconds"), (int, float)):
         errs.append("capture.seconds missing")
+    _, capture_errors = capture_metadata(r)
+    errs.extend(capture_errors)
     for k in ("settings.profile", "scene"):
         if get_dotted(r, k) is None:
             errs.append("%s missing (recommended)" % k)

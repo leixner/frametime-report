@@ -549,6 +549,39 @@ class CompareValidateTests(unittest.TestCase):
                     "capture.phase", "capture.clockStart"):
             self.assertIn(key, ftreport.LIKE_FOR_LIKE_KEYS)
 
+    def test_validate_rejects_bad_launch_metadata(self):
+        good = self.report("cold", 40.0, extra=[
+            ("capture.phase", "cold-boot"), ("capture.firstPresentMs", "2400"),
+            ("settings.shaderCache", "cold"),
+        ])
+        self.assertEqual(run(["validate", good])[0], 0)
+        mutations = (
+            ("phase", "cold_boot", "capture.phase must be"),
+            ("clockStart", "boot", "capture.clockStart must be"),
+            ("firstPresentMs", -1, "capture.firstPresentMs must be"),
+            ("firstPresentMs", float("nan"), "capture.firstPresentMs must be"),
+            ("firstPresentMs", None, "capture.firstPresentMs (launch to first present) is missing"),
+        )
+        with open(good, encoding="utf-8") as report:
+            original = report.read()
+        for key, value, message in mutations:
+            with self.subTest(key=key, value=value):
+                r = json.loads(original)
+                if value is None:
+                    del r["capture"][key]
+                else:
+                    r["capture"][key] = value
+                bad = write(self.d, "bad-launch.json", json.dumps(r))
+                code, text = run(["validate", bad])
+                self.assertEqual(code, 1)
+                self.assertIn(message, text)
+        r = json.loads(original)
+        r["settings"]["shaderCache"] = "hot"
+        bad = write(self.d, "bad-cache.json", json.dumps(r))
+        code, text = run(["validate", bad])
+        self.assertEqual(code, 1)
+        self.assertIn("settings.shaderCache must be", text)
+
     def test_validate(self):
         good = self.report("g", 40.0)
         bad = write(self.d, "bad.json", json.dumps({"format": "other"}))

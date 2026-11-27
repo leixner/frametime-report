@@ -355,7 +355,7 @@
     if (phase !== null && PHASES.indexOf(phase) < 0) { problems.push("capture.phase must be cold-boot or scene"); phase = null; }
     if (clock !== null && CLOCK_STARTS.indexOf(clock) < 0) { problems.push("capture.clockStart must be launch or first-present"); clock = null; }
     if (cache !== null && SHADER_CACHES.indexOf(cache) < 0) problems.push("settings.shaderCache must be cold or warm");
-    if (first !== null && (typeof first !== "number" || first < 0)) {
+    if (first !== null && (!Number.isFinite(first) || first < 0)) {
       problems.push("capture.firstPresentMs must be a number of milliseconds");
       first = null;
     }
