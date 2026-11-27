@@ -114,13 +114,36 @@ static int ftlog__cat(char *buf, int len, const char *s)
     return len;
 }
 
-/* milliseconds with 3 decimals, independent of the C locale */
+/* A non-negative fixed-point number (value / 10^decimals) written by hand:
+ * no printf, so neither the C locale nor a strict feature-test macro (which
+ * hides snprintf on some systems) can affect it. Returns the length. */
+static int ftlog__fixed(char *out, double value, int decimals)
+{
+    char tmp[32];
+    int n = 0, len = 0, scale = 1, i;
+    unsigned long long v, whole, frac;
+    for (i = 0; i < decimals; i++) scale *= 10;
+    if (!(value >= 0.0)) value = 0.0;               /* also NaN */
+    if (value > 1e15) value = 1e15;
+    v = (unsigned long long)(value * (double)scale + 0.5);
+    whole = v / (unsigned long long)scale;
+    frac = v % (unsigned long long)scale;
+    do { tmp[n++] = (char)('0' + (int)(whole % 10)); whole /= 10; } while (whole);
+    while (n) out[len++] = tmp[--n];
+    if (decimals) {
+        out[len++] = '.';
+        for (i = decimals - 1; i >= 0; i--) { out[len + i] = (char)('0' + (int)(frac % 10)); frac /= 10; }
+        len += decimals;
+    }
+    out[len] = 0;
+    return len;
+}
+
+/* milliseconds with 3 decimals */
 static int ftlog__cat_ms(char *buf, int len, double ms)
 {
     char tmp[40];
-    long long us = (long long)(ms * 1000.0 + 0.5);
-    if (us < 0) us = 0;
-    snprintf(tmp, sizeof tmp, "%lld.%03lld", us / 1000, us % 1000);
+    ftlog__fixed(tmp, ms, 3);
     return ftlog__cat(buf, len, tmp);
 }
 
@@ -215,17 +238,16 @@ static void ftlog__record(int has_busy, double cpu_ms, double gpu_ms)
     now = ftlog__now_ms();
     t = now - ftlog__start;
     if (ftlog__have_last) {
-        char buf[128];
-        int len = 0;
-        long long a = (long long)(t * 1000.0 + 0.5), b = (long long)((now - ftlog__last) * 1000.0 + 0.5);
-        len = snprintf(buf, sizeof buf, "%lld.%03lld,%lld.%03lld", a / 1000, a % 1000, b / 1000, b % 1000);
+        char buf[160];
+        int len = ftlog__fixed(buf, t, 3);
+        buf[len++] = ',';
+        len += ftlog__fixed(buf + len, now - ftlog__last, 3);
         if (has_busy) {
             /* "v >= 0 && v < 1e12" also rejects NaN */
-            long long c = (long long)(cpu_ms * 1000.0 + 0.5), g = (long long)(gpu_ms * 1000.0 + 0.5);
-            if (cpu_ms >= 0.0 && cpu_ms < 1e12) len += snprintf(buf + len, sizeof buf - (size_t)len, ",%lld.%03lld", c / 1000, c % 1000);
-            else len += snprintf(buf + len, sizeof buf - (size_t)len, ",");
-            if (gpu_ms >= 0.0 && gpu_ms < 1e12) len += snprintf(buf + len, sizeof buf - (size_t)len, ",%lld.%03lld", g / 1000, g % 1000);
-            else len += snprintf(buf + len, sizeof buf - (size_t)len, ",");
+            buf[len++] = ',';
+            if (cpu_ms >= 0.0 && cpu_ms < 1e12) len += ftlog__fixed(buf + len, cpu_ms, 3);
+            buf[len++] = ',';
+            if (gpu_ms >= 0.0 && gpu_ms < 1e12) len += ftlog__fixed(buf + len, gpu_ms, 3);
         }
         buf[len++] = '\n';
         fwrite(buf, 1, (size_t)len, ftlog__f);
